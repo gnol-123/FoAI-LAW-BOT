@@ -411,13 +411,19 @@ userInput.addEventListener("input", () => {
   userInput.style.height = userInput.scrollHeight + "px";
 });
 
+let _sending = false;
+
 async function sendMessage() {
+  if (_sending) return;                   // block re-entrant calls
   const text = userInput.value.trim();
   if (!text) return;
 
-  // Auto-create a session if none is active
-  if (!currentSessionId) {
-    try {
+  _sending = true;
+  sendBtn.disabled = true;
+
+  try {
+    // Auto-create a session if none is active
+    if (!currentSessionId) {
       const session = await api("POST", "/sessions", {
         title: "New conversation",
         jurisdiction: "Australia",
@@ -427,36 +433,35 @@ async function sendMessage() {
       clearMessages();
       await loadSessions();
       highlightSession(currentSessionId);
+    }
+
+    userInput.value = "";
+    userInput.style.height = "auto";
+    appendMessage("user", text);
+
+    const thinkingEl = appendMessage("assistant", "Thinking…", "", true);
+
+    try {
+      const res = await api("POST", `/sessions/${currentSessionId}/chat`, { message: text });
+      thinkingEl.remove();
+      appendMessage("assistant", res.content, res.thinking || "");
+      if (res.tokenStatus) updateTokenBar(res.tokenStatus);
+      await loadSessions();
+      highlightSession(currentSessionId);
     } catch (err) {
-      showBanner("Could not create session: " + err.message);
-      return;
+      thinkingEl.remove();
+      if (err.message === "token_limit_reached") {
+        await fetchTokenStatus();
+        showBanner("Token limit reached — your allowance resets soon. Check the sidebar for the reset time.");
+      } else {
+        appendMessage("assistant", `⚠️ ${err.message}`);
+      }
     }
-  }
 
-  userInput.value = "";
-  userInput.style.height = "auto";
-  appendMessage("user", text);
-
-  const thinkingEl = appendMessage("assistant", "Thinking…", "", true);
-  sendBtn.disabled = true;
-
-  try {
-    const res = await api("POST", `/sessions/${currentSessionId}/chat`, { message: text });
-    thinkingEl.remove();
-    appendMessage("assistant", res.content, res.thinking || "");
-    if (res.tokenStatus) updateTokenBar(res.tokenStatus);
-    await loadSessions();
-    highlightSession(currentSessionId);
   } catch (err) {
-    thinkingEl.remove();
-    // Surface token-limit errors clearly; generic errors as inline text
-    if (err.message === "token_limit_reached") {
-      await fetchTokenStatus();
-      showBanner("Token limit reached — your allowance resets soon. Check the sidebar for the reset time.");
-    } else {
-      appendMessage("assistant", `⚠️ ${err.message}`);
-    }
+    showBanner("Could not create session: " + err.message);
   } finally {
+    _sending = false;
     sendBtn.disabled = false;
     scrollToBottom();
   }
