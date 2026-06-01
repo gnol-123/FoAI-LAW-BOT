@@ -240,7 +240,7 @@ function buildDocRow(doc) {
 }
 
 async function deleteDoc(docId, rowEl) {
-  if (!confirm("Delete this document and remove it from the search index?")) return;
+  if (!await showConfirm("Delete this document and remove it from the search index?")) return;
   try {
     await api("DELETE", `/documents/${docId}`);
     rowEl.remove();
@@ -387,7 +387,7 @@ function highlightSession(sessionId) {
 }
 
 async function deleteSession(sessionId, rowEl) {
-  if (!confirm("Delete this chat?")) return;
+  if (!await showConfirm("Delete this chat? This cannot be undone.")) return;
   try {
     await api("DELETE", `/sessions/${sessionId}`);
     rowEl.remove();
@@ -588,6 +588,33 @@ function clearMessages() {
 
 function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function showConfirm(message) {
+  return new Promise((resolve) => {
+    const backdrop = document.getElementById("confirm-backdrop");
+    const msgEl    = document.getElementById("confirm-message");
+    const okBtn    = document.getElementById("confirm-ok");
+    const cancelBtn = document.getElementById("confirm-cancel");
+
+    msgEl.textContent = message;
+    backdrop.classList.remove("hidden");
+
+    const finish = (result) => {
+      backdrop.classList.add("hidden");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      backdrop.removeEventListener("click", onBackdrop);
+      resolve(result);
+    };
+    const onOk       = () => finish(true);
+    const onCancel   = () => finish(false);
+    const onBackdrop = (e) => { if (e.target === backdrop) finish(false); };
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    backdrop.addEventListener("click", onBackdrop);
+  });
 }
 
 function showBanner(msg) {

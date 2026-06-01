@@ -125,13 +125,16 @@ def health():
 def create_user():
     uid = g.user["uid"]
     body = request.get_json(force=True)
-    user = users.create_user(
-        user_id=uid,
-        username=body["username"],
-        email=body["email"],
-        plan=body.get("plan", "free"),
-    )
-    return jsonify(user), 201
+    try:
+        user = users.create_user(
+            user_id=uid,
+            username=body["username"],
+            email=body["email"],
+            plan=body.get("plan", "free"),
+        )
+        return jsonify(user), 201
+    except ValueError:
+        return jsonify({"error": "already_exists"}), 409
 
 
 @app.get("/users/me")

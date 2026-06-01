@@ -62,13 +62,16 @@ def record_token_usage(user_id: str, tokens: int) -> dict:
 
 
 def create_user(user_id: str, username: str, email: str, plan: str = "free") -> dict:
+    ref = get_db().collection("users").document(user_id)
+    if ref.get().exists:
+        raise ValueError("already_exists")
     data = {
         "username": username,
         "email": email,
         "plan": plan,
         "createdAt": fs.SERVER_TIMESTAMP,
     }
-    get_db().collection("users").document(user_id).set(data)
+    ref.set(data)
     return {"userId": user_id, "username": username, "email": email, "plan": plan}
 
 
