@@ -15,7 +15,12 @@
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>tailwind.config = { darkMode: "class" }</script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"
+          integrity="sha256-Pn59f+s+XVjLbIBPaKtcJMx+XrYnD9bly7kSRzkhfQw="
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"
+          integrity="sha256-ieH6dkfLSVNw06mXrOQ4f10V2fTFrxI1LFPapACVYoc="
+          crossorigin="anonymous"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="antialiased bg-slate-950 dark:bg-slate-950">
@@ -121,7 +126,7 @@
     <!-- Main -->
     <main class="flex-1 flex flex-col bg-white dark:bg-slate-900 overflow-hidden">
 
-      <div id="messages" class="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-4">
+      <div id="messages" class="flex-1 overflow-y-auto flex flex-col">
         <div id="empty-state" class="flex flex-col items-center justify-center flex-1 text-center gap-2 py-20">
           <div class="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl flex items-center justify-center mb-2">
             <span class="text-3xl select-none">⚖️</span>

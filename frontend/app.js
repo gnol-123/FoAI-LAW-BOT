@@ -337,6 +337,7 @@ async function openSession(sessionId) {
   clearMessages();
   highlightSession(sessionId);
   const msgs = await api("GET", `/sessions/${sessionId}/messages`);
+  if (currentSessionId !== sessionId) return; // user switched away while loading
   for (const m of msgs) appendMessage(m.role, m.content, "");
   scrollToBottom();
 }
@@ -425,34 +426,87 @@ async function sendMessage() {
 function appendMessage(role, content, thinking = "", isThinking = false) {
   emptyState.style.display = "none";
 
-  // ── Temporary "thinking" placeholder ──────────────────────────────────────
+  // ── Shared row builder ────────────────────────────────────────────────────
+  function makeRow(extraClass) {
+    const row   = document.createElement("div");
+    row.className = `msg-row ${extraClass}`;
+    const inner = document.createElement("div");
+    inner.className = "msg-inner";
+    row.appendChild(inner);
+    return { row, inner };
+  }
+
+  // ── Thinking placeholder ──────────────────────────────────────────────────
   if (isThinking) {
-    const div = document.createElement("div");
-    div.className = "bubble-thinking max-w-[75%] self-start italic px-4 py-3 rounded-2xl rounded-bl-sm text-sm";
-    div.textContent = content;
-    messagesEl.appendChild(div);
+    const { row, inner } = makeRow("msg-assistant");
+
+    const icon = document.createElement("div");
+    icon.className = "msg-icon";
+    icon.textContent = "⚖️";
+
+    const body = document.createElement("div");
+    body.className = "msg-assistant-body";
+
+    const dot  = document.createElement("span");
+    dot.className = "msg-thinking-dot";
+    const span = document.createElement("span");
+    span.style.color = "var(--dim-color)";
+    span.style.fontStyle = "italic";
+    span.style.fontSize = "0.875rem";
+    span.textContent = content;
+    span.dataset.thinkingText = "true";
+
+    body.appendChild(dot);
+    body.appendChild(span);
+    inner.appendChild(icon);
+    inner.appendChild(body);
+    messagesEl.appendChild(row);
     scrollToBottom();
-    return div;
+    return row;
   }
 
   // ── User message ──────────────────────────────────────────────────────────
   if (role === "user") {
-    const div = document.createElement("div");
-    div.className = "max-w-[75%] self-end bg-indigo-600 text-white px-4 py-3 rounded-2xl rounded-br-sm text-sm leading-relaxed break-words";
-    div.textContent = content;
-    messagesEl.appendChild(div);
+    const { row, inner } = makeRow("msg-user");
+
+    const body = document.createElement("div");
+    body.className = "msg-user-body";
+
+    const label = document.createElement("div");
+    label.className = "msg-sender";
+    label.textContent = "You";
+
+    const text = document.createElement("div");
+    text.className = "msg-user-text";
+    text.textContent = content;
+
+    body.appendChild(label);
+    body.appendChild(text);
+    inner.appendChild(body);
+    messagesEl.appendChild(row);
     scrollToBottom();
-    return div;
+    return row;
   }
 
-  // ── Assistant message (with optional chain-of-thought) ────────────────────
-  const wrapper = document.createElement("div");
-  wrapper.className = "self-start max-w-[80%] flex flex-col gap-2";
+  // ── Assistant message ─────────────────────────────────────────────────────
+  const { row, inner } = makeRow("msg-assistant");
 
-  // Collapsible thinking block
+  const icon = document.createElement("div");
+  icon.className = "msg-icon";
+  icon.textContent = "⚖️";
+
+  const body = document.createElement("div");
+  body.className = "msg-assistant-body";
+
+  const label = document.createElement("div");
+  label.className = "msg-sender";
+  label.textContent = "LoRAai";
+  body.appendChild(label);
+
+  // Collapsible reasoning block
   if (thinking) {
     const details = document.createElement("details");
-    details.className = "thinking-block rounded-xl overflow-hidden text-xs";
+    details.className = "thinking-block rounded-xl overflow-hidden text-xs mb-3";
 
     const summary = document.createElement("summary");
     summary.className = "flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none font-medium list-none transition-colors";
@@ -460,33 +514,31 @@ function appendMessage(role, content, thinking = "", isThinking = false) {
 
     const thinkingBody = document.createElement("div");
     thinkingBody.className = "thinking-body px-4 py-3 leading-relaxed prose prose-sm max-w-none";
-    thinkingBody.innerHTML = marked.parse(thinking);
+    thinkingBody.innerHTML = DOMPurify.sanitize(marked.parse(thinking));
 
     details.appendChild(summary);
     details.appendChild(thinkingBody);
-    wrapper.appendChild(details);
+    body.appendChild(details);
 
     details.addEventListener("toggle", () => {
-      const chevron = summary.querySelector(".thinking-chevron");
-      chevron.style.transform = details.open ? "rotate(90deg)" : "";
+      summary.querySelector(".thinking-chevron").style.transform =
+        details.open ? "rotate(90deg)" : "";
     });
   }
 
-  // Answer block
-  const answerDiv = document.createElement("div");
-  answerDiv.className = "bubble-assistant px-5 py-4 rounded-2xl rounded-bl-sm prose prose-sm max-w-none";
-  const rendered = content ? marked.parse(content) : "";
-  if (rendered) {
-    answerDiv.innerHTML = rendered;
-  } else {
-    const stripped = (content || "").replace(/<[^>]+>/g, " ").trim();
-    answerDiv.textContent = stripped || "(empty response)";
-  }
+  // Answer
+  const answer = document.createElement("div");
+  answer.className = "prose prose-sm max-w-none";
+  answer.innerHTML = content
+    ? DOMPurify.sanitize(marked.parse(content))
+    : "(empty response)";
+  body.appendChild(answer);
 
-  wrapper.appendChild(answerDiv);
-  messagesEl.appendChild(wrapper);
+  inner.appendChild(icon);
+  inner.appendChild(body);
+  messagesEl.appendChild(row);
   scrollToBottom();
-  return wrapper;
+  return row;
 }
 
 function clearMessages() {
