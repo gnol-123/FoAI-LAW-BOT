@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from firebase_admin import auth
 from flask import Flask, g, jsonify, request
 
+from agent import chain as agent
 from db import chat_sessions, messages, users
 
 load_dotenv()
@@ -128,6 +129,37 @@ def add_message(session_id):
         sources=body.get("sources"),
     )
     return jsonify(message), 201
+
+
+# ---------------------------------------------------------------------------
+# Chat (agent) route
+# ---------------------------------------------------------------------------
+
+@app.post("/sessions/<session_id>/chat")
+@require_auth
+def chat(session_id):
+    body = request.get_json(force=True)
+    question = body.get("message", "").strip()
+    if not question:
+        return jsonify({"error": "message is required"}), 400
+
+    uid = g.user["uid"]
+
+    # Load history before saving the new user message so it isn't included twice
+    prior = messages.get_messages(uid, session_id)
+    history = [{"role": m["role"], "content": m["content"]} for m in prior]
+
+    # Persist user message
+    messages.add_message(uid, session_id, role="user", content=question)
+
+    # Run the agent
+    answer = agent.run(question=question, history=history)
+
+    # Persist assistant response and bump session updatedAt
+    saved = messages.add_message(uid, session_id, role="assistant", content=answer)
+    chat_sessions.update_session(uid, session_id, {})
+
+    return jsonify({"messageId": saved["messageId"], "content": answer})
 
 
 # ---------------------------------------------------------------------------

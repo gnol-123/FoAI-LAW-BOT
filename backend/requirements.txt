@@ -1,3 +1,5 @@
 flask>=3.0
 firebase-admin>=6.5
 python-dotenv>=1.0
+langchain-together>=0.2
+langchain-core>=0.3

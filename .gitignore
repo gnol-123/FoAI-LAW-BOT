@@ -12,6 +12,7 @@ venv/
 # IDE
 .vscode/
 .idea/
+backend/.env.example
 
 # Claude Code / Firebase IDE skill docs — not your code
 .agents/
