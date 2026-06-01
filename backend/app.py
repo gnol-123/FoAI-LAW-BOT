@@ -230,6 +230,16 @@ def chat(session_id):
         return jsonify({"error": "message is required"}), 400
 
     uid = g.user["uid"]
+
+    # ── Token limit pre-check ──────────────────────────────────────────────
+    token_status = users.get_token_status(uid)
+    if token_status["remaining"] <= 0:
+        return jsonify({
+            "error": "token_limit_reached",
+            "message": "You have used your 10,000-token allowance for this 10-hour window.",
+            "resetsAt": token_status["resetsAt"],
+        }), 429
+
     prior = messages.get_messages(uid, session_id)
     history = [{"role": m["role"], "content": m["content"]} for m in prior]
 
@@ -247,11 +257,15 @@ def chat(session_id):
         except Exception as exc:
             app.logger.warning(f"[rag] skipped: {exc}")
 
-    thinking, answer, sources = agent.run(
+    thinking, answer, sources, tokens_used = agent.run(
         question=question,
         history=history,
         context_chunks=context_chunks,
     )
+
+    # ── Record actual token usage ──────────────────────────────────────────
+    token_status = users.record_token_usage(uid, tokens_used)
+    app.logger.info(f"[tokens] {uid}: +{tokens_used} → {token_status['used']}/{token_status['limit']}")
 
     formatted_sources = [
         {
@@ -280,12 +294,23 @@ def chat(session_id):
     chat_sessions.update_session(uid, session_id, {"title": new_title} if new_title else {})
 
     return jsonify({
-        "messageId": saved["messageId"],
-        "content":   answer,
-        "thinking":  thinking,
-        "sources":   formatted_sources,
+        "messageId":   saved["messageId"],
+        "content":     answer,
+        "thinking":    thinking,
+        "sources":     formatted_sources,
+        "tokenStatus": token_status,
         **({"title": new_title} if new_title else {}),
     })
+
+
+# ---------------------------------------------------------------------------
+# Token status
+# ---------------------------------------------------------------------------
+
+@app.get("/users/me/tokens")
+@require_auth
+def token_status_route():
+    return jsonify(users.get_token_status(g.user["uid"]))
 
 
 # ---------------------------------------------------------------------------

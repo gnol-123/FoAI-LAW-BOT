@@ -112,14 +112,27 @@
         <div id="doc-list" class="flex-1 overflow-y-auto px-2 pb-2 space-y-1"></div>
       </div>
 
-      <!-- Footer: user email + theme toggle -->
-      <div class="px-4 py-3 border-t border-slate-800 dark:border-slate-900 flex items-center gap-2">
-        <p id="user-email" class="text-xs text-slate-500 truncate flex-1"></p>
-        <button id="theme-toggle"
-          class="flex-shrink-0 w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition text-sm"
-          title="Toggle dark / light mode">
-          🌙
-        </button>
+      <!-- Footer: token usage + user email + theme toggle -->
+      <div class="px-4 py-3 border-t border-slate-800 dark:border-slate-900 space-y-2">
+        <!-- Token bar -->
+        <div id="token-bar-wrap" class="hidden">
+          <div class="flex justify-between items-center mb-1">
+            <span class="text-xs text-slate-500">Tokens</span>
+            <span id="token-label" class="text-xs text-slate-500"></span>
+          </div>
+          <div class="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
+            <div id="token-bar" class="h-1 rounded-full transition-all duration-500 bg-indigo-500"></div>
+          </div>
+          <p id="token-reset" class="text-xs text-slate-600 mt-0.5 hidden"></p>
+        </div>
+        <div class="flex items-center gap-2">
+          <p id="user-email" class="text-xs text-slate-500 truncate flex-1"></p>
+          <button id="theme-toggle"
+            class="flex-shrink-0 w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition text-sm"
+            title="Toggle dark / light mode">
+            🌙
+          </button>
+        </div>
       </div>
     </aside>
 

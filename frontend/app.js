@@ -35,6 +35,37 @@ const sendBtn       = document.getElementById("send-btn");
 const userEmailEl   = document.getElementById("user-email");
 const themeToggle   = document.getElementById("theme-toggle");
 
+// ── Token bar ──────────────────────────────────────────────────────────────────
+const tokenBarWrap  = document.getElementById("token-bar-wrap");
+const tokenBar      = document.getElementById("token-bar");
+const tokenLabel    = document.getElementById("token-label");
+const tokenReset    = document.getElementById("token-reset");
+
+function updateTokenBar(status) {
+  if (!status) return;
+  tokenBarWrap.classList.remove("hidden");
+  const pct = Math.min(100, (status.used / status.limit) * 100);
+  tokenBar.style.width = pct + "%";
+  tokenBar.className = `h-1 rounded-full transition-all duration-500 ${
+    pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-indigo-500"
+  }`;
+  tokenLabel.textContent = `${status.used.toLocaleString()} / ${status.limit.toLocaleString()}`;
+  if (status.resetsAt) {
+    const resetsDate = new Date(status.resetsAt);
+    tokenReset.textContent = `Resets ${resetsDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    tokenReset.classList.remove("hidden");
+  } else {
+    tokenReset.classList.add("hidden");
+  }
+}
+
+async function fetchTokenStatus() {
+  try {
+    const status = await api("GET", "/users/me/tokens");
+    updateTokenBar(status);
+  } catch { /* non-fatal */ }
+}
+
 // ── Auth ───────────────────────────────────────────────────────────────────────
 onAuthStateChanged(auth, async (user) => {
   if (user) {
@@ -43,6 +74,7 @@ onAuthStateChanged(auth, async (user) => {
     userEmailEl.textContent = user.email;
     await ensureUserDoc();
     await loadSessions();
+    await fetchTokenStatus();
   } else {
     chatView.style.display  = "none";
     loginView.style.display = "";
@@ -412,11 +444,18 @@ async function sendMessage() {
     const res = await api("POST", `/sessions/${currentSessionId}/chat`, { message: text });
     thinkingEl.remove();
     appendMessage("assistant", res.content, res.thinking || "");
+    if (res.tokenStatus) updateTokenBar(res.tokenStatus);
     await loadSessions();
     highlightSession(currentSessionId);
   } catch (err) {
-    thinkingEl.className = thinkingEl.className.replace("text-slate-400 italic", "text-red-500");
-    thinkingEl.textContent = "Error: " + err.message;
+    thinkingEl.remove();
+    // Surface token-limit errors clearly; generic errors as inline text
+    if (err.message === "token_limit_reached") {
+      await fetchTokenStatus();
+      showBanner("Token limit reached — your allowance resets soon. Check the sidebar for the reset time.");
+    } else {
+      appendMessage("assistant", `⚠️ ${err.message}`);
+    }
   } finally {
     sendBtn.disabled = false;
     scrollToBottom();

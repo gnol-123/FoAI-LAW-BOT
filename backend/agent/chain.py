@@ -72,9 +72,10 @@ def run(
     question: str,
     history: list[dict],
     context_chunks: list[dict] | None = None,
-) -> tuple[str, str, list[dict]]:
+) -> tuple[str, str, list[dict], int]:
     """
-    Returns (thinking, answer, sources).
+    Returns (thinking, answer, sources, tokens_used).
+    tokens_used is the total input+output token count reported by the API.
     """
     lc_history = [
         HumanMessage(content=m["content"]) if m["role"] == "user"
@@ -99,11 +100,21 @@ def run(
         MessagesPlaceholder("history"),
         ("human", "{question}"),
     ])
-    raw = (prompt | _get_llm() | StrOutputParser()).invoke(
+
+    # Invoke without StrOutputParser so we keep the AIMessage (for usage metadata)
+    ai_msg = (prompt | _get_llm()).invoke(
         {"question": question, "history": lc_history}
     )
+    raw = ai_msg.content
+
+    # Together AI returns usage in usage_metadata; fall back to char estimate
+    usage       = getattr(ai_msg, "usage_metadata", None) or {}
+    tokens_used = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+    if not tokens_used:
+        tokens_used = (len(question) + len(raw)) // 4
+
     thinking, answer = _parse_response(raw)
-    return thinking, answer, context_chunks or []
+    return thinking, answer, context_chunks or [], tokens_used
 
 
 def _get_title_chain():
