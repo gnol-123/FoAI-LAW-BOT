@@ -11,4 +11,4 @@ export const firebaseConfig = {
 
 // Local dev:  http://127.0.0.1:5000
 // Production: replace with your Railway/Render URL, e.g. https://loraai-backend.up.railway.app
-export const API_URL = "http://127.0.0.1:5000";
+export const API_URL = "https://foai-law-bot-production.up.railway.app";

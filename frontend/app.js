@@ -380,7 +380,25 @@ userInput.addEventListener("input", () => {
 
 async function sendMessage() {
   const text = userInput.value.trim();
-  if (!text || !currentSessionId) return;
+  if (!text) return;
+
+  // Auto-create a session if none is active
+  if (!currentSessionId) {
+    try {
+      const session = await api("POST", "/sessions", {
+        title: "New conversation",
+        jurisdiction: "Australia",
+        practiceArea: "",
+      });
+      currentSessionId = session.sessionId;
+      clearMessages();
+      await loadSessions();
+      highlightSession(currentSessionId);
+    } catch (err) {
+      showBanner("Could not create session: " + err.message);
+      return;
+    }
+  }
 
   userInput.value = "";
   userInput.style.height = "auto";

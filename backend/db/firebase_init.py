@@ -17,9 +17,13 @@ def init_app():
             cred = credentials.Certificate(key_val)
 
         options = {}
-        bucket = os.environ.get("FIREBASE_STORAGE_BUCKET")
+        # Strip whitespace and gs:// prefix — common copy-paste artifacts
+        bucket = os.environ.get("FIREBASE_STORAGE_BUCKET", "").strip().removeprefix("gs://")
         if bucket:
             options["storageBucket"] = bucket
+            print(f"[firebase] storageBucket: {bucket}")
+        else:
+            print("[firebase] WARNING: FIREBASE_STORAGE_BUCKET not set")
         firebase_admin.initialize_app(cred, options)
 
 
