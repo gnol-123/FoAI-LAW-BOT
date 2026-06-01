@@ -10,7 +10,7 @@ def create_user(user_id: str, username: str, email: str, plan: str = "free") -> 
         "createdAt": fs.SERVER_TIMESTAMP,
     }
     get_db().collection("users").document(user_id).set(data)
-    return {"userId": user_id, **data}
+    return {"userId": user_id, "username": username, "email": email, "plan": plan}
 
 
 def get_user(user_id: str) -> dict | None:

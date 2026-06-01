@@ -1,19 +1,36 @@
-# Firebase credentials — never commit this
+# ── Secrets & credentials ──────────────────────────────────────────────────
+# Firebase service account keys — NEVER commit these
+*firebase-adminsdk*.json
 serviceAccountKey.json
 *.json.key
 
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
+# Environment files with real values
+# .env.example files are safe to commit — they have no real values
 .env
 
-# IDE
+# ── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# ── Generated / runtime data ───────────────────────────────────────────────
+# Whoosh full-text index — large binary, rebuilt automatically on app startup
+backend/whoosh_index/
+
+# Scraper — locally downloaded PDFs before upload (large, not source code)
+scraper/downloads/
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
-backend/.env.example
 
-# Claude Code / Firebase IDE skill docs — not your code
+# ── Tool session data ───────────────────────────────────────────────────────
+.claude/
 .agents/
 skills-lock.json
+.playwright-mcp/

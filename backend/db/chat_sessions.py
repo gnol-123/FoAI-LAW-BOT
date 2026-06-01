@@ -6,6 +6,13 @@ def _sessions_ref(user_id: str):
     return get_db().collection("users").document(user_id).collection("chatSessions")
 
 
+def _serialize(data: dict) -> dict:
+    return {
+        k: v.isoformat() if hasattr(v, "isoformat") else v
+        for k, v in data.items()
+    }
+
+
 def create_session(
     user_id: str,
     title: str,
@@ -24,7 +31,11 @@ def create_session(
         },
     }
     ref.set(data)
-    return {"sessionId": ref.id, **data}
+    return {
+        "sessionId": ref.id,
+        "title": title,
+        "metadata": data["metadata"],
+    }
 
 
 def get_session(user_id: str, session_id: str) -> dict | None:
@@ -38,7 +49,7 @@ def list_sessions(user_id: str) -> list[dict]:
         .order_by("updatedAt", direction=fs.Query.DESCENDING)
         .stream()
     )
-    return [{"sessionId": d.id, **d.to_dict()} for d in docs]
+    return [{"sessionId": d.id, **_serialize(d.to_dict())} for d in docs]
 
 
 def update_session(user_id: str, session_id: str, fields: dict) -> None:

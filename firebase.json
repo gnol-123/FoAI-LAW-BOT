@@ -4,5 +4,12 @@
     "location": "australia-southeast1",
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "hosting": {
+    "public": "frontend",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
   }
 }
