@@ -571,22 +571,42 @@ async function sendMessage() {
     userInput.style.height = "auto";
     appendMessage("user", text);
 
-    const thinkingEl = appendMessage("assistant", "Thinking…", "", true);
+    const sessionId = currentSessionId;
+    const stream    = createStreamingAssistantMessage();
 
     try {
-      const res = await api("POST", `/sessions/${currentSessionId}/chat`, { message: text });
-      thinkingEl.remove();
-      appendMessage("assistant", res.content, res.thinking || "");
-      if (res.tokenStatus) updateTokenBar(res.tokenStatus);
+      await streamChat(sessionId, text, (evt) => {
+        // Ignore late events if the user navigated to another session.
+        if (currentSessionId !== sessionId) return;
+        switch (evt.type) {
+          case "status":
+            stream.setStatus(evt.stage === "retrieving"
+              ? "Searching documents…" : "Thinking…");
+            break;
+          case "thinking":
+            stream.appendThinking(evt.text);
+            break;
+          case "answer":
+            stream.appendAnswer(evt.text);
+            break;
+          case "done":
+            stream.finalize(evt.thinking, evt.content);
+            if (evt.tokenStatus) updateTokenBar(evt.tokenStatus);
+            break;
+          case "error":
+            stream.error(evt.message);
+            break;
+        }
+      });
       await loadSessions();
-      highlightSession(currentSessionId);
+      highlightSession(sessionId);
     } catch (err) {
-      thinkingEl.remove();
       if (err.message === "token_limit_reached") {
+        stream.remove();
         await fetchTokenStatus();
         showBanner("Token limit reached — your allowance resets soon. Check the sidebar for the reset time.");
       } else {
-        appendMessage("assistant", `⚠️ ${err.message}`);
+        stream.error(err.message);
       }
     }
 
@@ -597,6 +617,186 @@ async function sendMessage() {
     sendBtn.disabled = false;
     scrollToBottom();
   }
+}
+
+// ── Streaming (SSE) ──────────────────────────────────────────────────────────────
+// POST to /chat and consume the text/event-stream, invoking onEvent(evt) for each
+// `data:` frame. Throws on non-2xx (e.g. "token_limit_reached") like api().
+async function streamChat(sessionId, message, onEvent) {
+  const token = await auth.currentUser.getIdToken();
+  const res = await fetch(`${API_URL}/sessions/${sessionId}/chat`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ message }),
+  });
+
+  if (!res.ok) {
+    let data = {};
+    try { data = await res.json(); } catch { /* not JSON */ }
+    throw new Error(data.error ?? res.statusText);
+  }
+
+  const reader  = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    // SSE frames are separated by a blank line.
+    let sep;
+    while ((sep = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+
+      const data = frame
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).replace(/^ /, ""))
+        .join("\n");
+      if (!data) continue;
+
+      let evt;
+      try { evt = JSON.parse(data); } catch { continue; }
+      onEvent(evt);
+    }
+  }
+}
+
+// Build an assistant message that updates in place as tokens stream in, and
+// return handlers to drive it. Mirrors the rendered shape of appendMessage().
+function createStreamingAssistantMessage() {
+  emptyState.style.display = "none";
+
+  const row = document.createElement("div");
+  row.className = "msg-row msg-assistant";
+  const inner = document.createElement("div");
+  inner.className = "msg-inner";
+  row.appendChild(inner);
+
+  const icon = document.createElement("div");
+  icon.className = "msg-icon";
+  icon.textContent = "⚖️";
+
+  const body = document.createElement("div");
+  body.className = "msg-assistant-body";
+
+  const label = document.createElement("div");
+  label.className = "msg-sender";
+  label.textContent = "LoRAai";
+  body.appendChild(label);
+
+  // Status line with a pulsing dot — shown until the first token arrives.
+  const status = document.createElement("div");
+  status.style.display = "flex";
+  status.style.alignItems = "center";
+  const dot = document.createElement("span");
+  dot.className = "msg-thinking-dot";
+  const statusText = document.createElement("span");
+  statusText.style.color = "var(--dim-color)";
+  statusText.style.fontStyle = "italic";
+  statusText.style.fontSize = "0.875rem";
+  statusText.textContent = "Thinking…";
+  status.appendChild(dot);
+  status.appendChild(statusText);
+  body.appendChild(status);
+
+  // Collapsible reasoning block — open & visible while thinking streams,
+  // collapsed once the answer is finalised.
+  const details = document.createElement("details");
+  details.className = "thinking-block rounded-xl overflow-hidden text-xs mb-3";
+  details.open = true;
+  details.style.display = "none";
+  const summary = document.createElement("summary");
+  summary.className = "flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none font-medium list-none transition-colors";
+  summary.innerHTML = `<span class="thinking-chevron transition-transform duration-200">▶</span> 🧠 Reasoning`;
+  const chevron = summary.querySelector(".thinking-chevron");
+  chevron.style.transform = "rotate(90deg)";   // open by default
+  const thinkingBody = document.createElement("div");
+  thinkingBody.className = "thinking-body px-4 py-3 leading-relaxed prose prose-sm max-w-none";
+  details.appendChild(summary);
+  details.appendChild(thinkingBody);
+  details.addEventListener("toggle", () => {
+    chevron.style.transform = details.open ? "rotate(90deg)" : "";
+  });
+  body.appendChild(details);
+
+  // Answer
+  const answerEl = document.createElement("div");
+  answerEl.className = "prose prose-sm max-w-none";
+  body.appendChild(answerEl);
+
+  inner.appendChild(icon);
+  inner.appendChild(body);
+  messagesEl.appendChild(row);
+  scrollToBottom();
+
+  let thinkingRaw = "";
+  let answerRaw   = "";
+  let finalized   = false;
+  let rafPending  = false;
+
+  // Re-render the accumulated answer markdown at most once per frame.
+  function scheduleAnswerRender() {
+    if (rafPending || finalized) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      if (finalized) return;
+      answerEl.innerHTML = DOMPurify.sanitize(marked.parse(answerRaw));
+      scrollToBottom();
+    });
+  }
+
+  return {
+    setStatus(text) {
+      if (!finalized) statusText.textContent = text;
+    },
+    appendThinking(t) {
+      thinkingRaw += t;
+      status.style.display = "none";
+      details.style.display = "";
+      thinkingBody.textContent = thinkingRaw;   // plain text while streaming
+      scrollToBottom();
+    },
+    appendAnswer(t) {
+      answerRaw += t;
+      status.style.display = "none";
+      scheduleAnswerRender();
+    },
+    finalize(finalThinking, finalAnswer) {
+      finalized = true;
+      status.remove();
+      const th = (finalThinking ?? thinkingRaw).trim();
+      const an = (finalAnswer   ?? answerRaw).trim();
+      if (th) {
+        thinkingBody.innerHTML = DOMPurify.sanitize(marked.parse(th));
+        details.open = false;                   // collapse once complete
+        chevron.style.transform = "";
+      } else {
+        details.remove();
+      }
+      answerEl.innerHTML = an
+        ? DOMPurify.sanitize(marked.parse(an))
+        : "(empty response)";
+      scrollToBottom();
+    },
+    error(msg) {
+      finalized = true;
+      status.remove();
+      details.remove();
+      answerEl.innerHTML = DOMPurify.sanitize(marked.parse(`⚠️ ${msg}`));
+      scrollToBottom();
+    },
+    remove() {
+      row.remove();
+    },
+  };
 }
 
 function appendMessage(role, content, thinking = "", isThinking = false) {

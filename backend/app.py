@@ -1,10 +1,11 @@
+import json
 import os
 import uuid
 from functools import wraps
 
 from dotenv import load_dotenv
 from firebase_admin import auth
-from flask import Flask, g, jsonify, request
+from flask import Flask, Response, g, jsonify, request
 from flask_cors import CORS
 
 from agent import chain as agent
@@ -86,6 +87,19 @@ def sync_from_storage() -> None:
 
 
 sync_from_storage()
+
+
+# Pre-warm the FastEmbed model while the master process is still single-threaded.
+# With gunicorn --preload, workers fork AFTER this runs and inherit the loaded
+# model via copy-on-write shared memory — so the first chat request pays no
+# download cost and never triggers the "Fetching 5 files" delay.
+if _rag_ready():
+    try:
+        from rag.embeddings import embed
+        embed("warmup")
+        print("[startup] Embedding model ready")
+    except Exception as exc:
+        print(f"[startup] Embedding model preload skipped: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +238,11 @@ def add_message(session_id):
 # Chat (agent + RAG)
 # ---------------------------------------------------------------------------
 
+def _sse(payload: dict) -> str:
+    """Serialise a dict as a Server-Sent Events `data:` frame."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 @app.post("/sessions/<session_id>/chat")
 @require_auth
 def chat(session_id):
@@ -235,6 +254,7 @@ def chat(session_id):
     uid = g.user["uid"]
 
     # ── Token limit pre-check ──────────────────────────────────────────────
+    # Done before streaming starts so we can still return an HTTP 429 + JSON.
     token_status = users.get_token_status(uid)
     if token_status["remaining"] <= 0:
         return jsonify({
@@ -243,67 +263,97 @@ def chat(session_id):
             "resetsAt": token_status["resetsAt"],
         }), 429
 
-    prior = messages.get_messages(uid, session_id)
+    prior   = messages.get_messages(uid, session_id)
     history = [{"role": m["role"], "content": m["content"]} for m in prior]
+    is_first = not prior
 
+    # Persist the user's message before the stream begins (survives disconnect).
     messages.add_message(uid, session_id, role="user", content=question)
 
-    # Query expansion + hybrid RRF retrieval
-    context_chunks = []
-    if _rag_ready():
+    # Everything the generator needs is captured here as locals — the generator
+    # runs after the request context is gone, so it must NOT touch request / g.
+    def event_stream():
+        # ── Query expansion + hybrid RRF retrieval ─────────────────────────
+        context_chunks = []
+        if _rag_ready():
+            yield _sse({"type": "status", "stage": "retrieving"})
+            try:
+                from rag.query_expansion import expand
+                from rag.hybrid_retriever import retrieve
+                queries = expand(question)
+                app.logger.info(f"[rag] queries: {queries}")
+                context_chunks = retrieve(queries)
+            except Exception as exc:
+                app.logger.warning(f"[rag] skipped: {exc}")
+
+        formatted_sources = [
+            {
+                "documentId":     c["documentId"],
+                "excerpt":        c["text"][:200],
+                "relevanceScore": c["score"],
+                "citation":       f"{c['filename']}, p.{c['pageNumber']}",
+            }
+            for c in context_chunks
+        ]
+
+        # ── Stream the model response token by token ───────────────────────
+        thinking = answer = ""
+        tokens_used = 0
         try:
-            from rag.query_expansion import expand
-            from rag.hybrid_retriever import retrieve
-            queries = expand(question)
-            app.logger.info(f"[rag] queries: {queries}")
-            context_chunks = retrieve(queries)
-        except Exception as exc:
-            app.logger.warning(f"[rag] skipped: {exc}")
-
-    thinking, answer, sources, tokens_used = agent.run(
-        question=question,
-        history=history,
-        context_chunks=context_chunks,
-    )
-
-    # ── Record actual token usage ──────────────────────────────────────────
-    token_status = users.record_token_usage(uid, tokens_used)
-    app.logger.info(f"[tokens] {uid}: +{tokens_used} → {token_status['used']}/{token_status['limit']}")
-
-    formatted_sources = [
-        {
-            "documentId":     c["documentId"],
-            "excerpt":        c["text"][:200],
-            "relevanceScore": c["score"],
-            "citation":       f"{c['filename']}, p.{c['pageNumber']}",
-        }
-        for c in sources
-    ]
-
-    saved = messages.add_message(
-        uid, session_id,
-        role="assistant",
-        content=answer,
-        sources=formatted_sources,
-    )
-
-    new_title = None
-    if not prior:
-        try:
-            new_title = agent.generate_title(question)
+            for ev in agent.stream_response(question, history, context_chunks):
+                etype = ev["type"]
+                if etype == "thinking":
+                    yield _sse({"type": "thinking", "text": ev["text"]})
+                elif etype == "answer":
+                    yield _sse({"type": "answer", "text": ev["text"]})
+                elif etype == "final":
+                    thinking    = ev["thinking"]
+                    answer      = ev["answer"]
+                    tokens_used = ev["tokens"]
         except Exception:
-            pass
+            app.logger.exception("[chat] streaming failed")
+            yield _sse({"type": "error",
+                        "message": "The model failed to respond. Please try again."})
+            return
 
-    chat_sessions.update_session(uid, session_id, {"title": new_title} if new_title else {})
+        # ── Persist result + record token usage ────────────────────────────
+        token_status = users.record_token_usage(uid, tokens_used)
+        app.logger.info(f"[tokens] {uid}: +{tokens_used} → {token_status['used']}/{token_status['limit']}")
 
-    return jsonify({
-        "messageId":   saved["messageId"],
-        "content":     answer,
-        "thinking":    thinking,
-        "sources":     formatted_sources,
-        "tokenStatus": token_status,
-        **({"title": new_title} if new_title else {}),
-    })
+        saved = messages.add_message(
+            uid, session_id,
+            role="assistant",
+            content=answer,
+            sources=formatted_sources,
+        )
+
+        new_title = None
+        if is_first:
+            try:
+                new_title = agent.generate_title(question)
+            except Exception:
+                pass
+
+        chat_sessions.update_session(uid, session_id, {"title": new_title} if new_title else {})
+
+        yield _sse({
+            "type":        "done",
+            "messageId":   saved["messageId"],
+            "content":     answer,
+            "thinking":    thinking,
+            "sources":     formatted_sources,
+            "tokenStatus": token_status,
+            **({"title": new_title} if new_title else {}),
+        })
+
+    return Response(
+        event_stream(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control":    "no-cache",
+            "X-Accel-Buffering": "no",   # disable proxy buffering (e.g. nginx)
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -409,4 +459,6 @@ def delete_doc(doc_id):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # threaded=True so a streaming /chat response doesn't block other requests
+    # (e.g. token-status polling) on the single-process dev server.
+    app.run(debug=True, threaded=True)

@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from typing import Generator
 
 from langchain_together import ChatTogether
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -45,9 +46,14 @@ def _get_llm() -> ChatTogether:
     global _llm
     if _llm is None:
         _llm = ChatTogether(
-            model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            # Qwen follows the mandatory <thinking>/<answer> format more reliably
+            # than Llama while keeping comparable latency on Together's Turbo tier.
+            model="Qwen/Qwen2.5-72B-Instruct-Turbo",
             api_key=os.environ["TOGETHER_API_KEY"],
             temperature=0,
+            # Together is OpenAI-compatible: ask for usage in the final stream
+            # chunk so streamed responses still get an accurate token count.
+            stream_usage=True,
         )
     return _llm
 
@@ -68,17 +74,39 @@ def _parse_response(raw: str) -> tuple[str, str]:
     return thinking, answer
 
 
-def run(
+# Tags the model emits around its two sections (it continues from the
+# "<thinking>\n" prefill, so the opening <thinking> never appears in the stream).
+_THINK_CLOSE  = "</thinking>"
+_ANSWER_OPEN  = "<answer>"
+_ANSWER_CLOSE = "</answer>"
+
+
+def _hold_back(buffer: str, tag: str) -> int:
+    """
+    How many trailing chars of `buffer` to withhold from emission because they
+    could be the start of a `tag` split across stream chunks.
+
+    e.g. buffer ending in "</think" must hold those 7 chars in case the next
+    chunk completes "</thinking>". Returns 0 when nothing needs withholding.
+    """
+    for n in range(min(len(buffer), len(tag) - 1), 0, -1):
+        if buffer[-n:] == tag[:n]:
+            return n
+    return 0
+
+
+def _build_messages(
     question: str,
     history: list[dict],
     context_chunks: list[dict] | None = None,
-) -> tuple[str, str, list[dict], int]:
+) -> list:
     """
-    Returns (thinking, answer, sources, tokens_used).
+    Build the LangChain message list, ending with an assistant prefill.
 
-    Uses assistant prefill (<thinking> as the last message) so the model is
-    forced to start its response inside the thinking block — guaranteeing the
-    chain-of-thought is always present.
+    Passing an incomplete AIMessage (``<thinking>\\n``) as the last message tells
+    Together AI to *continue* generating from that point — guaranteeing the
+    response starts inside the thinking block, so the chain-of-thought is always
+    present. Shared by both run() and stream_response().
     """
     lc_history = [
         HumanMessage(content=m["content"]) if m["role"] == "user"
@@ -98,16 +126,26 @@ def run(
             + excerpts
         )
 
-    # Build message list directly so we can append the assistant prefill.
-    # Passing an incomplete AIMessage as the last message tells Together AI
-    # to continue generating from that point — guaranteeing <thinking> appears.
-    messages = [
+    return [
         SystemMessage(content=system),
         *lc_history,
         HumanMessage(content=question),
         AIMessage(content="<thinking>\n"),   # assistant prefill
     ]
 
+
+def run(
+    question: str,
+    history: list[dict],
+    context_chunks: list[dict] | None = None,
+) -> tuple[str, str, list[dict], int]:
+    """
+    Returns (thinking, answer, sources, tokens_used).
+
+    Non-streaming variant — used for background tasks. The live chat endpoint
+    uses stream_response() instead.
+    """
+    messages = _build_messages(question, history, context_chunks)
     ai_msg = _get_llm().invoke(messages)
 
     # Reconstruct full raw text: the model continued from after "<thinking>\n"
@@ -121,6 +159,109 @@ def run(
 
     thinking, answer = _parse_response(raw)
     return thinking, answer, context_chunks or [], tokens_used
+
+
+def stream_response(
+    question: str,
+    history: list[dict],
+    context_chunks: list[dict] | None = None,
+) -> Generator[dict, None, None]:
+    """
+    Stream the model response as it is generated, splitting the <thinking> and
+    <answer> sections on the fly.
+
+    Yields event dicts:
+      {"type": "thinking", "text": <delta>}  — reasoning tokens, as they arrive
+      {"type": "answer",   "text": <delta>}  — answer tokens, as they arrive
+      {"type": "final", "thinking": str, "answer": str, "tokens": int}
+            — emitted once at the end with the authoritative parsed sections
+              (so the caller can persist clean text) and the token count.
+
+    The XML tags are stripped from the deltas and never split across events,
+    even when a tag straddles two stream chunks.
+    """
+    messages = _build_messages(question, history, context_chunks)
+
+    state      = "thinking"          # thinking → between → answer → done
+    buf        = ""
+    raw_parts  = ["<thinking>\n"]    # mirrors the prefill, for the final parse
+    real_tokens = 0
+    answer_started = False           # to trim newline(s) right after <answer>
+
+    for chunk in _get_llm().stream(messages):
+        # Usage metadata rides along on the final chunk (stream_usage=True).
+        usage = getattr(chunk, "usage_metadata", None)
+        if usage:
+            real_tokens = (usage.get("input_tokens", 0) or 0) + \
+                          (usage.get("output_tokens", 0) or 0)
+
+        delta = chunk.content or ""
+        if not delta:
+            continue
+        raw_parts.append(delta)
+        buf += delta
+
+        # One chunk can cross multiple section boundaries, so loop until stable.
+        advanced = True
+        while advanced:
+            advanced = False
+
+            if state == "thinking":
+                i = buf.find(_THINK_CLOSE)
+                if i != -1:
+                    head, buf = buf[:i], buf[i + len(_THINK_CLOSE):]
+                    if head:
+                        yield {"type": "thinking", "text": head}
+                    state, advanced = "between", True
+                else:
+                    keep = len(buf) - _hold_back(buf, _THINK_CLOSE)
+                    if keep > 0:
+                        yield {"type": "thinking", "text": buf[:keep]}
+                        buf = buf[keep:]
+
+            elif state == "between":
+                # Discard everything up to and including <answer>, plus the
+                # newline that follows it. Wait for more text if not seen yet.
+                i = buf.find(_ANSWER_OPEN)
+                if i != -1:
+                    buf = buf[i + len(_ANSWER_OPEN):].lstrip("\n")
+                    state, advanced = "answer", True
+
+            elif state == "answer":
+                # Trim the newline(s) that follow <answer> before real content —
+                # they may arrive in a later chunk than the tag itself.
+                if not answer_started:
+                    buf = buf.lstrip("\r\n")
+                i = buf.find(_ANSWER_CLOSE)
+                if i != -1:
+                    head = buf[:i]
+                    if head:
+                        answer_started = True
+                        yield {"type": "answer", "text": head}
+                    buf, state = "", "done"
+                else:
+                    keep = len(buf) - _hold_back(buf, _ANSWER_CLOSE)
+                    if keep > 0:
+                        answer_started = True
+                        yield {"type": "answer", "text": buf[:keep]}
+                        buf = buf[keep:]
+
+            # state == "done": ignore any trailing content after </answer>
+
+    # Flush any held-back tail (model stopped before closing its tags).
+    if state == "thinking" and buf:
+        yield {"type": "thinking", "text": buf}
+    elif state == "answer":
+        tail = buf if answer_started else buf.lstrip("\r\n")
+        if tail:
+            yield {"type": "answer", "text": tail}
+
+    # Authoritative final parse from the full reconstructed text. This corrects
+    # any format drift in the live deltas and yields the clean text to persist.
+    raw = "".join(raw_parts)
+    thinking, answer = _parse_response(raw)
+    tokens = real_tokens or (len(raw) // 4)
+    yield {"type": "final", "thinking": thinking, "answer": answer, "tokens": tokens}
 
 
 def generate_title(first_message: str) -> str:
