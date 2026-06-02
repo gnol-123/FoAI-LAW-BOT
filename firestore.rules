@@ -2,17 +2,23 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Only the authenticated owner can read or write their own data
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-
-      match /chatSessions/{sessionId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
-
-        match /messages/{messageId} {
-          allow read, write: if request.auth != null && request.auth.uid == userId;
-        }
-      }
+    // ── DENY ALL DIRECT CLIENT ACCESS ────────────────────────────────────────
+    //
+    // This app's frontend communicates exclusively through the Flask API.
+    // The backend uses Firebase Admin SDK, which bypasses security rules
+    // entirely, so all legitimate reads and writes are already authorised
+    // at the application layer.
+    //
+    // Allowing any client-side Firestore access would let an attacker:
+    //   • Reset tokenWindow to bypass the token quota
+    //   • Read other users' sessions or messages if a rule were misconfigured
+    //   • Write arbitrary data to any document they own
+    //
+    // Safest posture: deny everything at the database layer and let the
+    // backend be the single gatekeeper.
+    //
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

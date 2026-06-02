@@ -86,6 +86,14 @@ async function fetchTokenStatus() {
 }
 
 // ── Auth helpers ───────────────────────────────────────────────────────────────
+
+// Tells Firebase where to redirect the user after they click the link in the
+// verification email. Without this, the link opens a plain Firebase page.
+const VERIFY_ACTION_SETTINGS = {
+  url: `${location.origin}/`,
+  handleCodeInApp: false,
+};
+
 function mapAuthError(code) {
   return ({
     "auth/email-already-in-use":  "An account with this email already exists.",
@@ -166,7 +174,13 @@ authForm.addEventListener("submit", async (e) => {
     }
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
-      await sendEmailVerification(cred.user);
+      // Separate try so a failed email send still shows the verify screen.
+      // The user can always hit "Resend verification email" from there.
+      try {
+        await sendEmailVerification(cred.user, VERIFY_ACTION_SETTINGS);
+      } catch (emailErr) {
+        console.warn("[auth] sendEmailVerification failed:", emailErr.message);
+      }
       showVerifyView(cred.user);
     } catch (err) {
       authError.textContent = mapAuthError(err.code);
@@ -205,8 +219,8 @@ verifyCheckBtn.addEventListener("click", async () => {
 
 verifyResendBtn.addEventListener("click", async () => {
   try {
-    await sendEmailVerification(auth.currentUser);
-    verifyMsg.textContent = "✓ Verification email sent!";
+    await sendEmailVerification(auth.currentUser, VERIFY_ACTION_SETTINGS);
+    verifyMsg.textContent = "✓ Verification email sent! Check your spam folder too.";
   } catch {
     verifyMsg.textContent = "Could not resend — wait a moment and try again.";
   }
@@ -281,7 +295,7 @@ docUpload.addEventListener("change", async () => {
   uploadStatus.classList.remove("hidden");
   uploadStatus.textContent = `Uploading ${file.name}…`;
 
-  const storageRef = ref(storage, `uploads/${file.name}`);
+  const storageRef = ref(storage, `uploads/${auth.currentUser.uid}/${file.name}`);
   const task = uploadBytesResumable(storageRef, file);
 
   task.on(

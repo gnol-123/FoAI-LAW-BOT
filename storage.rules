@@ -1,8 +1,44 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    match /uploads/{filename} {
-      allow read, write: if request.auth != null;
+
+    // ── Legislation PDFs ──────────────────────────────────────────────────────
+    // Uploaded exclusively by the scraper via Admin SDK — no client access.
+    match /legislation/{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // ── User document uploads ─────────────────────────────────────────────────
+    // Path: uploads/{userId}/{filename}
+    //
+    // Security properties enforced:
+    //   • Only the owning user can read or create their own files
+    //   • Email must be verified before any storage access is granted
+    //   • PDF content-type only — rejects images, executables, etc.
+    //   • Hard 20 MB size cap per file
+    //   • No client-side update or delete — the backend Admin SDK handles
+    //     deletion so users cannot remove files that are still indexed
+    //
+    match /uploads/{userId}/{filename} {
+      allow read: if request.auth != null
+                  && request.auth.uid == userId
+                  && request.auth.token.email_verified == true;
+
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.auth.token.email_verified == true
+                    && request.resource.size  <= 20 * 1024 * 1024
+                    && request.resource.contentType == 'application/pdf';
+
+      // update / delete: Admin SDK only (bypasses rules)
+      allow update, delete: if false;
+    }
+
+    // ── Catch-all deny ────────────────────────────────────────────────────────
+    // Any path not explicitly matched above is denied.
+    // This covers future prefixes that haven't been thought of yet.
+    match /{allPaths=**} {
+      allow read, write: if false;
     }
   }
 }
