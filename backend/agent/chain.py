@@ -1,12 +1,14 @@
+import json
 import logging
 import os
 import re
-from typing import Generator
+from typing import Callable, Generator
 
 from langchain_together import ChatTogether
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import tool
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,11 @@ and analyse statutes.
 - Do NOT use `<sub>`, `<sup>`, or HTML tags in your response
 - When citing, PLEASE show snippets of the sentence or paragraph you are referencing. 
 
+## RAG tool
+You have access to a `query_rag` tool. Use it to retrieve relevant document excerpts whenever \
+you need to look up legislation, case law, or any topic not already in your context. \
+You may call it multiple times with different queries before writing your answer.
+
 ## Mandatory output format
 You MUST structure every response exactly as shown below — no exceptions:
 
@@ -43,6 +50,45 @@ You MUST structure every response exactly as shown below — no exceptions:
 
 _llm = None
 _title_llm = None
+
+# ---------------------------------------------------------------------------
+# RAG tool registration
+# ---------------------------------------------------------------------------
+
+# Callers register their retriever once at startup:
+#   import llm as llm_module
+#   llm_module.register_rag_query_fn(my_retriever)
+#
+# The function must accept a query string and return list[dict] where each dict
+# has at least: {"filename": str, "pageNumber": int|str, "text": str}
+_rag_query_fn: Callable[[str], list[dict]] | None = None
+
+
+def register_rag_query_fn(fn: Callable[[str], list[dict]]) -> None:
+    """Register the RAG retriever the LLM tool will call."""
+    global _rag_query_fn
+    _rag_query_fn = fn
+
+
+# ---------------------------------------------------------------------------
+# LangChain tool definition
+# ---------------------------------------------------------------------------
+
+@tool
+def query_rag(query: str) -> str:
+    """
+    Search the legal document database for excerpts relevant to *query*.
+    Returns a JSON array of objects with keys: filename, pageNumber, text.
+    Call this whenever you need to look up legislation, case law, or any
+    topic not already supplied in the conversation context.
+    """
+    if _rag_query_fn is None:
+        return json.dumps([])
+    chunks = _rag_query_fn(query)
+    return json.dumps(chunks, ensure_ascii=False)
+
+
+_RAG_TOOLS = [query_rag]
 
 
 def _get_llm() -> ChatTogether:
@@ -63,6 +109,14 @@ def _get_llm() -> ChatTogether:
             stream_usage=True,
         )
     return _llm
+
+
+def _get_llm_with_tools() -> ChatTogether:
+    """Return the LLM bound with the RAG tool (when a retriever is registered)."""
+    llm = _get_llm()
+    if _rag_query_fn is not None:
+        return llm.bind_tools(_RAG_TOOLS)
+    return llm
 
 
 def _parse_response(raw: str) -> tuple[str, str]:
@@ -158,6 +212,38 @@ def _build_messages(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Tool-call helpers
+# ---------------------------------------------------------------------------
+
+def _execute_tool_calls(ai_msg: AIMessage) -> list[ToolMessage]:
+    """
+    Execute any tool calls present on *ai_msg* and return ToolMessage results.
+    Only `query_rag` is registered, but the loop is generic.
+    """
+    results = []
+    for tc in ai_msg.tool_calls:
+        name = tc["name"]
+        args = tc["args"]
+        tool_id = tc["id"]
+
+        if name == "query_rag":
+            output = query_rag.invoke(args)
+        else:
+            output = json.dumps({"error": f"Unknown tool: {name}"})
+
+        results.append(ToolMessage(content=output, tool_call_id=tool_id))
+    return results
+
+
+def _tool_calls_present(ai_msg: AIMessage) -> bool:
+    return bool(getattr(ai_msg, "tool_calls", None))
+
+
+# ---------------------------------------------------------------------------
+# Public API  (unchanged signatures)
+# ---------------------------------------------------------------------------
+
 def run(
     question: str,
     history: list[dict],
@@ -170,20 +256,46 @@ def run(
 
     Non-streaming variant — used for background tasks. The live chat endpoint
     uses stream_response() instead.
+
+    If a RAG retriever is registered the LLM may issue query_rag tool calls;
+    those are executed transparently before the final answer is produced.
     """
     messages = _build_messages(question, history, context_chunks, attachment_text, attachment_name)
-    ai_msg = _get_llm().invoke(messages)
+    llm = _get_llm_with_tools()
+
+    total_tokens = 0
+    all_chunks: list[dict] = list(context_chunks or [])
+
+    # Agentic loop: keep going while the model wants to call tools.
+    while True:
+        ai_msg = llm.invoke(messages)
+
+        usage = getattr(ai_msg, "usage_metadata", None) or {}
+        total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
+        if not _tool_calls_present(ai_msg):
+            break
+
+        # Execute tool calls, collect any new RAG chunks, extend the conversation.
+        tool_messages = _execute_tool_calls(ai_msg)
+        for tm in tool_messages:
+            try:
+                chunks = json.loads(tm.content)
+                if isinstance(chunks, list):
+                    all_chunks.extend(chunks)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        messages = [*messages, ai_msg, *tool_messages]
 
     raw = ai_msg.content or ""
     log.debug(f"[LLM] raw response ({len(raw)} chars): {raw[:300]!r}")
 
-    usage       = getattr(ai_msg, "usage_metadata", None) or {}
-    tokens_used = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-    if not tokens_used:
-        tokens_used = len(raw) // 4
+    if not total_tokens:
+        total_tokens = len(raw) // 4
 
     thinking, answer = _parse_response(raw)
-    return thinking, answer, context_chunks or [], tokens_used
+    return thinking, answer, all_chunks, total_tokens
 
 
 def stream_response(
@@ -200,6 +312,8 @@ def stream_response(
     Yields event dicts:
       {"type": "thinking", "text": <delta>}  — reasoning tokens, as they arrive
       {"type": "answer",   "text": <delta>}  — answer tokens, as they arrive
+      {"type": "tool_call", "name": str, "query": str}
+            — emitted when the model issues a RAG query (so the UI can show it)
       {"type": "final", "thinking": str, "answer": str, "tokens": int}
             — emitted once at the end with the authoritative parsed sections
               (so the caller can persist clean text) and the token count.
@@ -208,16 +322,54 @@ def stream_response(
     even when a tag straddles two stream chunks.
     """
     messages = _build_messages(question, history, context_chunks, attachment_text, attachment_name)
+    llm = _get_llm_with_tools()
 
-    state      = "open"              # open → thinking → between → answer → done
+    total_tokens = 0
+    all_chunks: list[dict] = list(context_chunks or [])
+
+    # Agentic loop: resolve all tool calls before streaming the final answer.
+    # Tool-call turns are NOT streamed (they're fast retrieval round-trips);
+    # only the final text-generation turn is streamed token-by-token.
+    while True:
+        # Peek: do a non-streaming invoke to check for tool calls.
+        # If the model wants tools it won't produce much text anyway.
+        ai_msg = llm.invoke(messages)
+
+        usage = getattr(ai_msg, "usage_metadata", None) or {}
+        total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
+        if not _tool_calls_present(ai_msg):
+            # No more tool calls — break and stream this final response below.
+            # We discard ai_msg and re-issue as a stream so the caller gets deltas.
+            break
+
+        # Notify the UI and execute each tool call.
+        for tc in ai_msg.tool_calls:
+            yield {"type": "tool_call", "name": tc["name"], "query": tc["args"].get("query", "")}
+
+        tool_messages = _execute_tool_calls(ai_msg)
+        for tm in tool_messages:
+            try:
+                chunks = json.loads(tm.content)
+                if isinstance(chunks, list):
+                    all_chunks.extend(chunks)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        messages = [*messages, ai_msg, *tool_messages]
+
+    # -----------------------------------------------------------------------
+    # Stream the final (non-tool-call) answer token by token.
+    # (Identical streaming logic to the original implementation.)
+    # -----------------------------------------------------------------------
+    state      = "open"
     buf        = ""
-    raw_parts  = []                  # full model output, for the final parse
+    raw_parts  = []
     real_tokens = 0
-    thinking_started = False         # to trim newline(s) right after <thinking>
-    answer_started   = False         # to trim newline(s) right after <answer>
+    thinking_started = False
+    answer_started   = False
 
-    for chunk in _get_llm().stream(messages):
-        # Usage metadata rides along on the final chunk (stream_usage=True).
+    for chunk in llm.stream(messages):
         usage = getattr(chunk, "usage_metadata", None)
         if usage:
             real_tokens = (usage.get("input_tokens", 0) or 0) + \
@@ -229,19 +381,16 @@ def stream_response(
         raw_parts.append(delta)
         buf += delta
 
-        # One chunk can cross multiple section boundaries, so loop until stable.
         advanced = True
         while advanced:
             advanced = False
 
             if state == "open":
-                # Discard everything up to and including the opening <thinking>.
                 i = buf.find(_THINK_OPEN)
                 if i != -1:
                     buf = buf[i + len(_THINK_OPEN):].lstrip("\r\n")
                     state, advanced = "thinking", True
                 else:
-                    # Hold a possible partial "<thinking>" tail; drop any preamble.
                     tail = _hold_back(buf, _THINK_OPEN)
                     buf = buf[len(buf) - tail:] if tail else ""
 
@@ -263,16 +412,12 @@ def stream_response(
                         buf = buf[keep:]
 
             elif state == "between":
-                # Discard everything up to and including <answer>, plus the
-                # newline that follows it. Wait for more text if not seen yet.
                 i = buf.find(_ANSWER_OPEN)
                 if i != -1:
                     buf = buf[i + len(_ANSWER_OPEN):].lstrip("\n")
                     state, advanced = "answer", True
 
             elif state == "answer":
-                # Trim the newline(s) that follow <answer> before real content —
-                # they may arrive in a later chunk than the tag itself.
                 if not answer_started:
                     buf = buf.lstrip("\r\n")
                 i = buf.find(_ANSWER_CLOSE)
@@ -289,9 +434,6 @@ def stream_response(
                         yield {"type": "answer", "text": buf[:keep]}
                         buf = buf[keep:]
 
-            # state == "done": ignore any trailing content after </answer>
-
-    # Flush any held-back tail (model stopped before closing its tags).
     if state == "thinking":
         tail = buf if thinking_started else buf.lstrip("\r\n")
         if tail:
@@ -301,11 +443,9 @@ def stream_response(
         if tail:
             yield {"type": "answer", "text": tail}
 
-    # Authoritative final parse from the full reconstructed text. This corrects
-    # any format drift in the live deltas and yields the clean text to persist.
     raw = "".join(raw_parts)
     thinking, answer = _parse_response(raw)
-    tokens = real_tokens or (len(raw) // 4)
+    tokens = (total_tokens + real_tokens) or (len(raw) // 4)
     yield {"type": "final", "thinking": thinking, "answer": answer, "tokens": tokens}
 
 
