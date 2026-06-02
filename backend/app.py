@@ -223,7 +223,12 @@ def rename_session(session_id):
 @app.get("/sessions/<session_id>/messages")
 @require_auth
 def get_messages(session_id):
-    return jsonify(messages.get_messages(g.user["uid"], session_id))
+    msgs = messages.get_messages(g.user["uid"], session_id)
+    # Strip server-side attachment text — it's reconstructed into the LLM prompt
+    # internally and is too large (up to 50k chars) to send back to the frontend.
+    for m in msgs:
+        m.pop("attachmentText", None)
+    return jsonify(msgs)
 
 
 @app.post("/sessions/<session_id>/messages")
@@ -398,12 +403,33 @@ def chat(session_id):
     if len(attachment_text) > _MAX_TEXT_CHARS:
         attachment_text = attachment_text[:_MAX_TEXT_CHARS]
 
-    prior   = messages.get_messages(uid, session_id)
-    history = [{"role": m["role"], "content": m["content"]} for m in prior]
+    prior    = messages.get_messages(uid, session_id)
     is_first = not prior
 
+    # Reconstruct full LLM-facing content for historical user messages that had
+    # an attachment, so the model can reference the document in follow-up turns.
+    history = []
+    for m in prior:
+        content = m["content"]
+        if m["role"] == "user" and m.get("attachmentText"):
+            label   = m.get("attachmentName") or "attached file"
+            content = (
+                f"{content}\n\n"
+                f"---\n"
+                f"**Attached: {label}**\n\n"
+                f"{m['attachmentText']}"
+            )
+        history.append({"role": m["role"], "content": content})
+
     # Persist the user's message before the stream begins (survives disconnect).
-    messages.add_message(uid, session_id, role="user", content=question)
+    # Attachment text is stored here so future turns can reference the document.
+    messages.add_message(
+        uid, session_id,
+        role="user",
+        content=question,
+        attachment_text=attachment_text,
+        attachment_name=attachment_name,
+    )
 
     # Everything the generator needs is captured here as locals — the generator
     # runs after the request context is gone, so it must NOT touch request / g.

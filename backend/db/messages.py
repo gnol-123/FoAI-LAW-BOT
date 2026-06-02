@@ -17,6 +17,8 @@ def add_message(
     role: str,
     content: str,
     sources: list | None = None,
+    attachment_text: str = "",
+    attachment_name: str = "",
 ) -> dict:
     ref = _messages_ref(user_id, session_id).document()
     data = {
@@ -25,8 +27,20 @@ def add_message(
         "timestamp": fs.SERVER_TIMESTAMP,
         "sources": sources or [],
     }
+    # Store attachment on the message so the LLM can reference it in future turns.
+    # attachmentText is kept server-side only; the API strips it before returning
+    # to the frontend (50k chars is too large to send back on every history load).
+    if attachment_text:
+        data["attachmentText"] = attachment_text
+        data["attachmentName"] = attachment_name
     ref.set(data)
-    return {"messageId": ref.id, "role": role, "content": content, "sources": sources or []}
+    return {
+        "messageId":    ref.id,
+        "role":         role,
+        "content":      content,
+        "sources":      sources or [],
+        **({"attachmentName": attachment_name} if attachment_name else {}),
+    }
 
 
 def _serialize(data: dict) -> dict:

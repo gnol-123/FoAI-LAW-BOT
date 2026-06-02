@@ -474,7 +474,7 @@ async function openSession(sessionId) {
   highlightSession(sessionId);
   const msgs = await api("GET", `/sessions/${sessionId}/messages`);
   if (currentSessionId !== sessionId) return;
-  for (const m of msgs) appendMessage(m.role, m.content, "");
+  for (const m of msgs) appendMessage(m.role, m.content, "", m.attachmentName ?? null, null);
   scrollToBottom();
 }
 
@@ -540,10 +540,10 @@ async function sendMessage() {
     userInput.value = "";
     userInput.style.height = "auto";
 
-    // Snapshot the current attachment for this message.
-    // Intentionally NOT cleared — the file stays attached across the whole
-    // conversation until the user explicitly removes it with ✕.
+    // Snapshot and clear — the document is now saved in Firestore history and
+    // the LLM will have it in context on every subsequent turn automatically.
     const pendingAttachment = attachment;
+    clearAttachment();
 
     appendMessage("user", text, "", pendingAttachment?.filename ?? null, pendingAttachment?.type ?? null);
 
