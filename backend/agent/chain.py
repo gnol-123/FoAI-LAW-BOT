@@ -219,33 +219,98 @@ def _build_messages(
 # Tool-call helpers
 # ---------------------------------------------------------------------------
 
-def _execute_tool_calls(ai_msg: AIMessage) -> list[ToolMessage]:
+def _extract_text_tool_calls(content: str) -> list[dict]:
     """
-    Execute any tool calls present on *ai_msg* and return ToolMessage results.
-    Only `query_rag` is registered, but the loop is generic.
+    Together AI's Qwen3 serverless tier doesn't support OpenAI-style structured
+    tool calling — the model instead emits tool calls as JSON text, e.g.
+      {"name": "query_rag", "input": "Australian Constitution s 1"}
+    This parser extracts those and normalises them into the same shape as
+    ai_msg.tool_calls so the agentic loop can handle both paths uniformly.
+    Supports "input", "query", and nested "args"/"arguments" key variants.
     """
     results = []
-    for tc in ai_msg.tool_calls:
-        name = tc["name"]
-        args = tc["args"]
-        tool_id = tc["id"]
+    for i, match in enumerate(re.finditer(r'\{[^{}]*"name"\s*:\s*"(\w+)"[^{}]*\}', content)):
+        try:
+            obj = json.loads(match.group(0))
+            name = obj.get("name", "")
+            if name not in {"query_rag"}:
+                continue
+            query = (
+                obj.get("input")
+                or obj.get("query")
+                or (obj.get("args") or {}).get("query")
+                or (obj.get("arguments") or {}).get("query")
+                or ""
+            )
+            if query:
+                results.append({
+                    "name":  name,
+                    "args":  {"query": str(query)},
+                    "id":    f"text-{i}",
+                    "_text": True,   # flag: was parsed from text, not a real tool_call
+                })
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return results
+
+
+def _tool_calls_for(ai_msg: AIMessage) -> list[dict]:
+    """
+    Return the tool calls to execute for *ai_msg*, preferring structured
+    tool_calls but falling back to parsing the text content.
+    """
+    structured = list(getattr(ai_msg, "tool_calls", None) or [])
+    if structured:
+        return structured
+    return _extract_text_tool_calls(ai_msg.content or "")
+
+
+def _execute_tool_calls(
+    ai_msg: AIMessage,
+    text_calls: list[dict],
+) -> tuple[list[ToolMessage], list[dict]]:
+    """
+    Execute tool calls from *ai_msg* (structured) or *text_calls* (text fallback).
+    Returns (tool_messages_for_history, new_rag_chunks).
+
+    For text-format calls the AIMessage itself has malformed content, so it is
+    NOT added to the message history — only ToolMessages are returned. The caller
+    uses the _text flag to know which path it's on.
+    """
+    structured = list(getattr(ai_msg, "tool_calls", None) or [])
+    calls = structured if structured else text_calls
+
+    tool_msgs = []
+    new_chunks: list[dict] = []
+
+    for tc in calls:
+        name    = tc["name"]
+        args    = tc["args"]
+        tool_id = tc.get("id", "tool-0")
 
         if name == "query_rag":
             output = query_rag.invoke(args)
         else:
             output = json.dumps({"error": f"Unknown tool: {name}"})
 
-        results.append(ToolMessage(content=output, tool_call_id=tool_id))
-    return results
+        try:
+            chunks = json.loads(output)
+            if isinstance(chunks, list):
+                new_chunks.extend(chunks)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
+        tool_msgs.append(ToolMessage(content=output, tool_call_id=tool_id))
 
-def _tool_calls_present(ai_msg: AIMessage) -> bool:
-    return bool(getattr(ai_msg, "tool_calls", None))
+    return tool_msgs, new_chunks
 
 
 # ---------------------------------------------------------------------------
 # Public API  (unchanged signatures)
 # ---------------------------------------------------------------------------
+
+_MAX_TOOL_ROUNDS = 5   # safety cap — prevent infinite tool-call loops
+
 
 def run(
     question: str,
@@ -268,30 +333,41 @@ def run(
 
     total_tokens = 0
     all_chunks: list[dict] = list(context_chunks or [])
+    ai_msg = None
 
-    # Agentic loop: keep going while the model wants to call tools.
-    while True:
+    for _ in range(_MAX_TOOL_ROUNDS):
         ai_msg = llm.invoke(messages)
 
         usage = getattr(ai_msg, "usage_metadata", None) or {}
         total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
 
-        if not _tool_calls_present(ai_msg):
-            break
+        calls = _tool_calls_for(ai_msg)
+        if not calls:
+            break   # no more tool calls — final answer
 
-        # Execute tool calls, collect any new RAG chunks, extend the conversation.
-        tool_messages = _execute_tool_calls(ai_msg)
-        for tm in tool_messages:
-            try:
-                chunks = json.loads(tm.content)
-                if isinstance(chunks, list):
-                    all_chunks.extend(chunks)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        tool_msgs, new_chunks = _execute_tool_calls(ai_msg, calls)
+        all_chunks.extend(new_chunks)
 
-        messages = [*messages, ai_msg, *tool_messages]
+        # Structured tool calls: append AIMessage + ToolMessages to history.
+        # Text-format fallback: the AIMessage content is malformed, so skip it
+        # and inject results as a human-turn context block instead.
+        if getattr(ai_msg, "tool_calls", None):
+            messages = [*messages, ai_msg, *tool_msgs]
+        else:
+            results_text = "\n\n---\n\n".join(
+                f'Query: "{c["args"]["query"]}"\n{tm.content}'
+                for c, tm in zip(calls, tool_msgs)
+            )
+            messages = [
+                *messages,
+                HumanMessage(content=(
+                    f"[RAG Search Results]\n\n{results_text}\n\n"
+                    "Now write your complete <thinking>…</thinking>"
+                    "<answer>…</answer> response."
+                )),
+            ]
 
-    raw = ai_msg.content or ""
+    raw = (ai_msg.content or "") if ai_msg else ""
     log.debug(f"[LLM] raw response ({len(raw)} chars): {raw[:300]!r}")
 
     if not total_tokens:
@@ -331,35 +407,46 @@ def stream_response(
     all_chunks: list[dict] = list(context_chunks or [])
 
     # Agentic loop: resolve all tool calls before streaming the final answer.
-    # Tool-call turns are NOT streamed (they're fast retrieval round-trips);
-    # only the final text-generation turn is streamed token-by-token.
-    while True:
-        # Peek: do a non-streaming invoke to check for tool calls.
-        # If the model wants tools it won't produce much text anyway.
+    # Tool-call turns are non-streaming (fast retrieval); only the final
+    # text-generation turn is streamed token-by-token to the client.
+    for _ in range(_MAX_TOOL_ROUNDS):
         ai_msg = llm.invoke(messages)
 
         usage = getattr(ai_msg, "usage_metadata", None) or {}
         total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
 
-        if not _tool_calls_present(ai_msg):
-            # No more tool calls — break and stream this final response below.
-            # We discard ai_msg and re-issue as a stream so the caller gets deltas.
+        calls = _tool_calls_for(ai_msg)
+        if not calls:
+            # No tool calls — this is the final answer; stream it below.
+            # We discard ai_msg and re-issue as llm.stream() to get deltas.
             break
 
-        # Notify the UI and execute each tool call.
-        for tc in ai_msg.tool_calls:
-            yield {"type": "tool_call", "name": tc["name"], "query": tc["args"].get("query", "")}
+        # Notify the UI about each query being executed.
+        for tc in calls:
+            yield {"type": "tool_call", "name": tc["name"],
+                   "query": tc["args"].get("query", "")}
 
-        tool_messages = _execute_tool_calls(ai_msg)
-        for tm in tool_messages:
-            try:
-                chunks = json.loads(tm.content)
-                if isinstance(chunks, list):
-                    all_chunks.extend(chunks)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        tool_msgs, new_chunks = _execute_tool_calls(ai_msg, calls)
+        all_chunks.extend(new_chunks)
 
-        messages = [*messages, ai_msg, *tool_messages]
+        # Structured path: history grows with AIMessage + ToolMessages.
+        # Text-fallback path: AIMessage content is malformed; inject results
+        # as a human-turn context block so the model can continue cleanly.
+        if getattr(ai_msg, "tool_calls", None):
+            messages = [*messages, ai_msg, *tool_msgs]
+        else:
+            results_text = "\n\n---\n\n".join(
+                f'Query: "{c["args"]["query"]}"\n{tm.content}'
+                for c, tm in zip(calls, tool_msgs)
+            )
+            messages = [
+                *messages,
+                HumanMessage(content=(
+                    f"[RAG Search Results]\n\n{results_text}\n\n"
+                    "Now write your complete <thinking>…</thinking>"
+                    "<answer>…</answer> response."
+                )),
+            ]
 
     # -----------------------------------------------------------------------
     # Stream the final (non-tool-call) answer token by token.
@@ -449,7 +536,8 @@ def stream_response(
     raw = "".join(raw_parts)
     thinking, answer = _parse_response(raw)
     tokens = (total_tokens + real_tokens) or (len(raw) // 4)
-    yield {"type": "final", "thinking": thinking, "answer": answer, "tokens": tokens}
+    yield {"type": "final", "thinking": thinking, "answer": answer,
+           "tokens": tokens, "chunks": all_chunks}
 
 
 def generate_title(first_message: str) -> str:

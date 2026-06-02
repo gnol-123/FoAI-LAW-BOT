@@ -157,6 +157,21 @@ if _rag_ready():
         print(f"[startup] Embedding model preload skipped: {exc}")
 
 
+# Register the hybrid retriever as the LLM's query_rag tool implementation.
+# The agent calls this at query time instead of app.py pre-fetching chunks.
+if _rag_ready():
+    def _rag_retrieve(query: str) -> list[dict]:
+        try:
+            from rag.query_expansion import expand
+            from rag.hybrid_retriever import retrieve
+            return retrieve(expand(query))
+        except Exception as exc:
+            print(f"[rag] tool retrieve failed: {exc}")
+            return []
+    agent.register_rag_query_fn(_rag_retrieve)
+    print("[startup] RAG tool registered")
+
+
 # ---------------------------------------------------------------------------
 # Auth middleware
 # ---------------------------------------------------------------------------
@@ -512,48 +527,45 @@ def chat(session_id):
     # Everything the generator needs is captured here as locals — the generator
     # runs after the request context is gone, so it must NOT touch request / g.
     def event_stream():
-        # ── Query expansion + hybrid RRF retrieval ─────────────────────────
-        context_chunks = []
-        if _rag_ready():
-            yield _sse({"type": "status", "stage": "retrieving"})
-            try:
-                from rag.query_expansion import expand
-                from rag.hybrid_retriever import retrieve
-                queries = expand(question)
-                app.logger.info(f"[rag] queries: {queries}")
-                context_chunks = retrieve(queries)
-            except Exception as exc:
-                app.logger.warning(f"[rag] skipped: {exc}")
-
-        formatted_sources = [
-            {
-                "documentId":     c["documentId"],
-                "excerpt":        c["text"][:200],
-                "relevanceScore": c["score"],
-                "citation":       f"{c['filename']}, p.{c['pageNumber']}",
-            }
-            for c in context_chunks
-        ]
+        # RAG retrieval is now LLM-driven: the model calls the query_rag tool
+        # autonomously inside stream_response(). No pre-fetch needed here.
 
         # ── Stream the model response token by token ───────────────────────
         thinking = answer = ""
         tokens_used = 0
+        all_chunks: list[dict] = []
         try:
-            for ev in agent.stream_response(question, history, context_chunks, attachment_text, attachment_name):
+            for ev in agent.stream_response(question, history, None, attachment_text, attachment_name):
                 etype = ev["type"]
                 if etype == "thinking":
                     yield _sse({"type": "thinking", "text": ev["text"]})
                 elif etype == "answer":
                     yield _sse({"type": "answer", "text": ev["text"]})
+                elif etype == "tool_call":
+                    # Forward the tool-call notification to the UI so it can show
+                    # "Searching documents…" while the query executes.
+                    yield _sse({"type": "status", "stage": "retrieving",
+                                "query": ev.get("query", "")})
                 elif etype == "final":
                     thinking    = ev["thinking"]
                     answer      = ev["answer"]
                     tokens_used = ev["tokens"]
+                    all_chunks  = ev.get("chunks", [])
         except Exception:
             app.logger.exception("[chat] streaming failed")
             yield _sse({"type": "error",
                         "message": "The model failed to respond. Please try again."})
             return
+
+        formatted_sources = [
+            {
+                "documentId":     c.get("documentId", ""),
+                "excerpt":        c.get("text", "")[:200],
+                "relevanceScore": c.get("score", 0),
+                "citation":       f"{c.get('filename', '')}, p.{c.get('pageNumber', '?')}",
+            }
+            for c in all_chunks
+        ]
 
         # ── Persist result + record token usage ────────────────────────────
         token_status = users.record_token_usage(uid, tokens_used)
