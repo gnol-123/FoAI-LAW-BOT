@@ -514,16 +514,16 @@ def chat(session_id):
     def event_stream():
         # ── Query expansion + hybrid RRF retrieval ─────────────────────────
         context_chunks = []
-        if _rag_ready():
-            yield _sse({"type": "status", "stage": "retrieving"})
-            try:
-                from rag.query_expansion import expand
-                from rag.hybrid_retriever import retrieve
-                queries = expand(question)
-                app.logger.info(f"[rag] queries: {queries}")
-                context_chunks = retrieve(queries)
-            except Exception as exc:
-                app.logger.warning(f"[rag] skipped: {exc}")
+        # if _rag_ready():
+        #     yield _sse({"type": "status", "stage": "retrieving"})
+        #     try:
+        #         from rag.query_expansion import expand
+        #         from rag.hybrid_retriever import retrieve
+        #         queries = expand(question)
+        #         app.logger.info(f"[rag] queries: {queries}")
+        #         context_chunks = retrieve(queries)
+        #     except Exception as exc:
+        #         app.logger.warning(f"[rag] skipped: {exc}")
 
         formatted_sources = [
             {
