@@ -40,6 +40,8 @@ const attachmentIcon      = document.getElementById("attachment-icon");
 const attachmentFilename  = document.getElementById("attachment-filename");
 const attachmentMeta      = document.getElementById("attachment-meta");
 const attachmentRemoveBtn = document.getElementById("attachment-remove");
+const chatMain            = document.getElementById("chat-main");
+const dragOverlay         = document.getElementById("drag-overlay");
 
 // Current pending attachment — cleared after each message send.
 // { text: string, filename: string, type: "pdf"|"image"|"text", charCount: number }
@@ -109,12 +111,13 @@ themeToggle.addEventListener("click", () => {
 });
 
 // ── File attachment ────────────────────────────────────────────────────────────
-const TYPE_ICONS = { pdf: "📄", image: "🖼️", text: "📝" };
+const TYPE_ICONS    = { pdf: "📄", image: "🖼️", text: "📝" };
+const ACCEPTED_EXTS = new Set(["pdf","png","jpg","jpeg","gif","webp","md","markdown","txt"]);
 
 function showAttachmentPreview() {
-  attachmentIcon.textContent     = TYPE_ICONS[attachment.type] ?? "📎";
-  attachmentFilename.textContent = attachment.filename;
-  attachmentMeta.textContent     = `${(attachment.charCount / 1000).toFixed(1)}k chars`;
+  attachmentIcon.textContent      = TYPE_ICONS[attachment.type] ?? "📎";
+  attachmentFilename.textContent  = attachment.filename;
+  attachmentMeta.textContent      = `${(attachment.charCount / 1000).toFixed(1)}k chars`;
   attachmentPreview.style.display = "flex";
 }
 
@@ -124,14 +127,14 @@ function clearAttachment() {
   fileInput.value = "";
 }
 
-attachBtn.addEventListener("click", () => fileInput.click());
-attachmentRemoveBtn.addEventListener("click", clearAttachment);
+// Shared upload logic — called by both the file picker and drag-and-drop.
+async function processFile(file) {
+  const ext = file.name.split(".").pop().toLowerCase();
+  if (!ACCEPTED_EXTS.has(ext)) {
+    showBanner(`Unsupported file type .${ext} — accepted: PDF, PNG, JPG, GIF, WEBP, MD, TXT`);
+    return;
+  }
 
-fileInput.addEventListener("change", async () => {
-  const file = fileInput.files[0];
-  if (!file) return;
-
-  // Show loading state on the attach button.
   attachBtn.disabled = true;
   attachBtn.classList.add("opacity-50");
 
@@ -149,7 +152,7 @@ fileInput.addEventListener("change", async () => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? res.statusText);
 
-    attachment = data;   // { filename, type, text, charCount }
+    attachment = data;
     showAttachmentPreview();
   } catch (err) {
     showBanner("Could not process file: " + err.message);
@@ -158,6 +161,42 @@ fileInput.addEventListener("change", async () => {
     attachBtn.disabled = false;
     attachBtn.classList.remove("opacity-50");
   }
+}
+
+attachBtn.addEventListener("click", () => fileInput.click());
+attachmentRemoveBtn.addEventListener("click", clearAttachment);
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files[0];
+  if (file) await processFile(file);
+});
+
+// ── Drag-and-drop onto the chat area ──────────────────────────────────────────
+// dragenter/dragleave fire on every child element crossing, so we use a counter
+// to avoid the overlay flickering as the cursor moves between child elements.
+let dragDepth = 0;
+
+chatMain.addEventListener("dragenter", (e) => {
+  e.preventDefault();
+  dragDepth++;
+  if (dragDepth === 1) dragOverlay.classList.remove("hidden");
+});
+
+chatMain.addEventListener("dragleave", () => {
+  dragDepth--;
+  if (dragDepth === 0) dragOverlay.classList.add("hidden");
+});
+
+chatMain.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+});
+
+chatMain.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dragOverlay.classList.add("hidden");
+  const file = e.dataTransfer.files[0];
+  if (file) await processFile(file);
 });
 
 // ── Token bar ─────────────────────────────────────────────────────────────────

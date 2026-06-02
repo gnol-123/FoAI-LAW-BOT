@@ -120,7 +120,20 @@
     </aside>
 
     <!-- ── Main ───────────────────────────────────────────────────────── -->
-    <main class="flex-1 flex flex-col bg-white dark:bg-slate-900 overflow-hidden min-w-0">
+    <main id="chat-main" class="flex-1 flex flex-col bg-white dark:bg-slate-900 overflow-hidden min-w-0 relative">
+
+      <!-- Drag-and-drop overlay — appears when a file is dragged over the chat area -->
+      <div id="drag-overlay"
+        class="hidden absolute inset-0 z-20 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm pointer-events-none">
+        <div class="flex flex-col items-center gap-3 border-2 border-dashed border-indigo-400/50 rounded-2xl px-14 py-10">
+          <svg class="w-10 h-10 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+          </svg>
+          <p class="text-indigo-200 font-semibold text-sm">Drop file to attach</p>
+          <p class="text-indigo-400/70 text-xs">PDF · image · Markdown · text</p>
+        </div>
+      </div>
 
       <div id="messages" class="flex-1 overflow-y-auto flex flex-col">
         <div id="empty-state" class="flex flex-col items-center justify-center flex-1 text-center gap-2 py-20">
