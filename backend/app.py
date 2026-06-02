@@ -94,7 +94,7 @@ def sync_from_storage() -> None:
         # shared RAG index. A regular user's uploads/{uid}/ space is private to
         # them and must NEVER be ingested into the knowledge base every user
         # queries — otherwise any verified user could poison legal results.
-        prefixes = ["legislation/"]
+        prefixes = ["legislation/", "uploads/"]
         admin_uids = _admin_uids()
         for admin_uid in admin_uids:
             prefixes.append(f"uploads/{admin_uid}/")
