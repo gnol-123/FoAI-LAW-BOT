@@ -6,7 +6,6 @@
   <title>LoRAai — Legal Research AI</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%234f46e5'/><text x='18' y='82' font-size='78' font-family='system-ui,sans-serif' font-weight='800' fill='white'>L</text></svg>">
 
-  <!-- Apply dark class before render to prevent flash -->
   <script>
     if (localStorage.getItem("theme") === "dark" ||
         (!localStorage.getItem("theme") && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
@@ -26,25 +25,41 @@
 </head>
 <body class="antialiased bg-slate-950 dark:bg-slate-950">
 
-  <!-- ── Chat ──────────────────────────────────────────────────────────── -->
   <!-- Hidden until chat.js confirms the user is authenticated. -->
   <div id="chat-view" style="display:none" class="flex h-screen">
 
-    <!-- Sidebar -->
-    <aside class="w-72 bg-slate-900 dark:bg-slate-950 flex flex-col flex-shrink-0 border-r border-slate-800 dark:border-slate-900">
+    <!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+    <aside id="sidebar" class="bg-slate-900 dark:bg-slate-950 flex flex-col flex-shrink-0 border-r border-slate-800 dark:border-slate-900">
 
-      <div class="flex items-center justify-between px-4 py-4 border-b border-slate-800 dark:border-slate-900">
-        <div class="flex items-center">
-          <span class="text-white font-bold tracking-tight text-lg">LoRAai</span>
+      <!-- Header -->
+      <div id="sidebar-header" class="flex items-center justify-between px-4 py-4 border-b border-slate-800 dark:border-slate-900">
+
+        <!-- Logo + brand (hidden when collapsed) -->
+        <div class="flex items-center gap-2 sidebar-label">
+          <div class="w-6 h-6 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
+            <span class="text-xs font-extrabold text-white tracking-tighter select-none">L</span>
+          </div>
+          <span class="text-white font-bold tracking-tight text-base">LoRAai</span>
         </div>
-        <button id="logout-btn"
-          class="text-xs text-slate-400 hover:text-slate-200 border border-slate-700 hover:border-slate-500 rounded-lg px-3 py-1.5 transition">
-          Logout
-        </button>
+
+        <!-- Right actions -->
+        <div class="flex items-center gap-1 flex-shrink-0">
+          <button id="logout-btn"
+            class="sidebar-label text-xs text-slate-400 hover:text-slate-200 border border-slate-700 hover:border-slate-500 rounded-lg px-3 py-1.5 transition">
+            Logout
+          </button>
+          <!-- Sidebar toggle (always visible, Ctrl/Cmd+B) -->
+          <button id="sidebar-toggle" title="Toggle sidebar"
+            class="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition flex-shrink-0">
+            <svg id="sidebar-chevron" class="w-4 h-4" style="transition:transform 0.25s ease" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <!-- Tabs -->
-      <div class="flex px-3 pt-2 pb-0 gap-1">
+      <div id="sidebar-tabs" class="flex px-3 pt-2 pb-0 gap-1 sidebar-label">
         <button id="tab-chats"
           class="tab-btn flex-1 text-xs font-medium py-1.5 rounded-lg bg-slate-700 text-white transition">
           Chats
@@ -57,19 +72,19 @@
 
       <!-- Chats panel -->
       <div id="panel-chats" class="flex flex-col flex-1 overflow-hidden">
-        <div class="px-3 py-3">
+        <div class="px-3 py-3 sidebar-label">
           <button id="new-session-btn"
             class="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60 text-white text-sm font-medium py-2.5 rounded-xl transition shadow-sm">
             <span class="text-lg leading-none font-light">+</span>
             New Chat
           </button>
         </div>
-        <div id="session-list" class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5"></div>
+        <div id="session-list" class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5 sidebar-label"></div>
       </div>
 
       <!-- Documents panel -->
       <div id="panel-docs" style="display:none" class="flex flex-col flex-1 overflow-hidden">
-        <div class="px-3 py-3">
+        <div class="px-3 py-3 sidebar-label">
           <label
             class="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium py-2.5 rounded-xl transition shadow-sm cursor-pointer">
             <span class="text-base leading-none">↑</span>
@@ -78,13 +93,12 @@
           </label>
           <div id="upload-status" class="hidden mt-2 text-xs text-slate-400 text-center"></div>
         </div>
-        <div id="doc-list" class="flex-1 overflow-y-auto px-2 pb-2 space-y-1"></div>
+        <div id="doc-list" class="flex-1 overflow-y-auto px-2 pb-2 space-y-1 sidebar-label"></div>
       </div>
 
-      <!-- Footer: token usage + user email + theme toggle -->
-      <div class="px-4 py-3 border-t border-slate-800 dark:border-slate-900 space-y-2">
-        <!-- Token bar -->
-        <div id="token-bar-wrap" class="hidden">
+      <!-- Footer -->
+      <div id="sidebar-footer" class="px-4 py-3 border-t border-slate-800 dark:border-slate-900 space-y-2">
+        <div id="token-bar-wrap" class="hidden sidebar-label">
           <div class="flex justify-between items-center mb-1">
             <span class="text-xs text-slate-500">Tokens</span>
             <span id="token-label" class="text-xs text-slate-500"></span>
@@ -94,8 +108,8 @@
           </div>
           <p id="token-reset" class="text-xs text-slate-600 mt-0.5 hidden"></p>
         </div>
-        <div class="flex items-center gap-2">
-          <p id="user-email" class="text-xs text-slate-500 truncate flex-1"></p>
+        <div id="sidebar-footer-row" class="flex items-center gap-2">
+          <p id="user-email" class="sidebar-label text-xs text-slate-500 truncate flex-1"></p>
           <button id="theme-toggle"
             class="flex-shrink-0 w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition text-sm"
             title="Toggle dark / light mode">
@@ -105,8 +119,8 @@
       </div>
     </aside>
 
-    <!-- Main -->
-    <main class="flex-1 flex flex-col bg-white dark:bg-slate-900 overflow-hidden">
+    <!-- ── Main ───────────────────────────────────────────────────────── -->
+    <main class="flex-1 flex flex-col bg-white dark:bg-slate-900 overflow-hidden min-w-0">
 
       <div id="messages" class="flex-1 overflow-y-auto flex flex-col">
         <div id="empty-state" class="flex flex-col items-center justify-center flex-1 text-center gap-2 py-20">
@@ -122,10 +136,10 @@
 
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
         <div class="flex items-end gap-3 max-w-4xl mx-auto">
+          <!-- No whitespace inside textarea tags — any whitespace becomes initial content -->
           <textarea id="user-input" rows="1"
             placeholder="Ask a legal question… (Enter to send, Shift+Enter for new line)"
-            class="flex-1 resize-none px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-700 focus:border-transparent transition max-h-32 leading-relaxed">
-          </textarea>
+            class="flex-1 resize-none px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-700 focus:border-transparent transition max-h-32 leading-relaxed"></textarea>
           <button id="send-btn"
             class="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-3 rounded-xl transition shadow-sm whitespace-nowrap">
             Send

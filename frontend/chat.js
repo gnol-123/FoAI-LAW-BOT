@@ -15,8 +15,11 @@ const storage     = getStorage(firebaseApp);
 let currentSessionId = null;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────────
-const chatView      = document.getElementById("chat-view");
-const logoutBtn     = document.getElementById("logout-btn");
+const chatView        = document.getElementById("chat-view");
+const sidebarEl       = document.getElementById("sidebar");
+const sidebarToggle   = document.getElementById("sidebar-toggle");
+const sidebarChevron  = document.getElementById("sidebar-chevron");
+const logoutBtn       = document.getElementById("logout-btn");
 const newSessionBtn = document.getElementById("new-session-btn");
 const sessionList   = document.getElementById("session-list");
 const tabChats      = document.getElementById("tab-chats");
@@ -47,6 +50,7 @@ onAuthStateChanged(auth, async (user) => {
   }
   userEmailEl.textContent = user.email;
   chatView.style.display  = "flex";
+  applySidebar();
   await ensureUserDoc();
   await loadSessions();
   await fetchTokenStatus();
@@ -54,6 +58,31 @@ onAuthStateChanged(auth, async (user) => {
 
 logoutBtn.addEventListener("click", () => signOut(auth));
 // After sign-out, onAuthStateChanged fires with null → replaces to index.html.
+
+// ── Sidebar collapse ───────────────────────────────────────────────────────────
+const SIDEBAR_KEY = "loraai-sidebar-collapsed";
+let sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
+
+function applySidebar() {
+  sidebarEl.classList.toggle("collapsed", sidebarCollapsed);
+  sidebarToggle.title = sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar";
+}
+
+sidebarToggle.addEventListener("click", () => {
+  sidebarCollapsed = !sidebarCollapsed;
+  localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
+  applySidebar();
+});
+
+// Ctrl+B / Cmd+B keyboard shortcut
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "b") {
+    e.preventDefault();
+    sidebarCollapsed = !sidebarCollapsed;
+    localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
+    applySidebar();
+  }
+});
 
 // ── Theme toggle ───────────────────────────────────────────────────────────────
 function applyTheme(dark) {

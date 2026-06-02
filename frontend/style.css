@@ -181,6 +181,28 @@ html.dark .prose a { color: #818cf8; }
 .dark .prose blockquote  { border-left-color: #6366f1; color: var(--dim-color); }
 .dark .prose a           { color: #818cf8; }
 
+/* ── Collapsible sidebar ─────────────────────────────────────── */
+#sidebar {
+  width: 18rem;                              /* default: w-72 */
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+#sidebar.collapsed { width: 4rem; }          /* collapsed: w-16 */
+
+/* Hide all labelled content when collapsed */
+#sidebar.collapsed .sidebar-label { display: none !important; }
+
+/* Hide panels (overrides any JS inline display:flex) */
+#sidebar.collapsed #panel-chats,
+#sidebar.collapsed #panel-docs   { display: none !important; }
+
+/* Flip the chevron arrow to point right when collapsed */
+#sidebar.collapsed #sidebar-chevron { transform: rotate(180deg); }
+
+/* Tighten footer padding and center theme toggle when collapsed */
+#sidebar.collapsed #sidebar-footer     { padding-left: 0.5rem; padding-right: 0.5rem; }
+#sidebar.collapsed #sidebar-footer-row { justify-content: center; }
+
 /* Error banner */
 #error-banner {
   display: none;
