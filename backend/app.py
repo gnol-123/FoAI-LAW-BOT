@@ -19,6 +19,9 @@ load_dotenv()
 init_app()
 
 app = Flask(__name__)
+# Werkzeug rejects bodies larger than this before they reach any view,
+# so oversized uploads never fully allocate memory.  Matches _MAX_FILE_BYTES.
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 CORS(app)
 
 
@@ -68,6 +71,7 @@ def sync_from_storage() -> None:
                 continue
 
             filename = blob.name.rsplit("/", 1)[-1]
+            
             doc_id   = (doc_meta or {}).get("documentId") or str(uuid.uuid4())
             print(f"[sync] indexing {filename} ({blob.name}) …")
 
@@ -261,7 +265,8 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
     return "\n\n".join(pages)
 
 
-def _describe_image(file_bytes: bytes, ext: str) -> str:
+def _describe_image(file_bytes: bytes, ext: str) -> tuple[str, int]:
+    """Return (description_text, tokens_used)."""
     from langchain_together import ChatTogether
     from langchain_core.messages import HumanMessage as LCHuman
 
@@ -283,12 +288,28 @@ def _describe_image(file_bytes: bytes, ext: str) -> str:
             "their data), diagrams, signatures, stamps, and headings. Be thorough."
         )},
     ])
-    return vision.invoke([msg]).content
+    result = vision.invoke([msg])
+    usage  = getattr(result, "usage_metadata", None) or {}
+    tokens = (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0)
+    return result.content, tokens or (len(result.content) // 4)
 
 
 @app.post("/context-file")
 @require_auth
 def upload_context_file():
+    uid = g.user["uid"]
+
+    # ── Token budget pre-check ─────────────────────────────────────────────
+    # Image description uses the vision LLM — reject early so quota can't be
+    # drained outside the normal chat budget envelope.
+    token_status = users.get_token_status(uid)
+    if token_status["remaining"] <= 0:
+        return jsonify({
+            "error": "token_limit_reached",
+            "message": "You have used your 10,000-token allowance for this 10-hour window.",
+            "resetsAt": token_status["resetsAt"],
+        }), 429
+
     if "file" not in request.files:
         return jsonify({"error": "file is required"}), 400
 
@@ -302,23 +323,33 @@ def upload_context_file():
                      f"Accepted: PDF, PNG, JPG, GIF, WEBP, MD, TXT"
         }), 400
 
-    file_bytes = file.read()
+    # ── Stream-capped read ─────────────────────────────────────────────────
+    # MAX_CONTENT_LENGTH (set at app creation) rejects oversized bodies at the
+    # Werkzeug layer before allocation. This secondary cap is an in-view guard
+    # for environments where the middleware limit may be misconfigured.
+    file_bytes = file.stream.read(_MAX_FILE_BYTES + 1)
     if len(file_bytes) > _MAX_FILE_BYTES:
-        return jsonify({"error": "File too large — maximum 20 MB"}), 400
+        return jsonify({"error": "File too large — maximum 20 MB"}), 413
 
     try:
+        vision_tokens = 0
         if ext == "pdf":
             text      = _extract_pdf_text(file_bytes)
             file_type = "pdf"
         elif ext in {"md", "markdown", "txt"}:
             text      = file_bytes.decode("utf-8", errors="replace")
             file_type = "text"
-        else:                           # image
-            text      = _describe_image(file_bytes, ext)
+        else:                           # image — uses the vision LLM
+            text, vision_tokens = _describe_image(file_bytes, ext)
             file_type = "image"
     except Exception as exc:
         app.logger.exception(f"[context-file] processing failed: {filename}")
         return jsonify({"error": str(exc)}), 422
+
+    # Charge vision token usage to the user's budget.
+    if vision_tokens:
+        users.record_token_usage(uid, vision_tokens)
+        app.logger.info(f"[context-file] {uid}: vision +{vision_tokens} tokens")
 
     if len(text) > _MAX_TEXT_CHARS:
         text = text[:_MAX_TEXT_CHARS] + f"\n\n[Content truncated at {_MAX_TEXT_CHARS:,} characters]"
@@ -362,6 +393,10 @@ def chat(session_id):
 
     attachment_text = (body.get("attachmentText") or "").strip()
     attachment_name = (body.get("attachmentName") or "").strip()
+    # Re-enforce the cap: a client could send attachmentText that bypasses the
+    # /context-file extraction path entirely and inflate context/token cost.
+    if len(attachment_text) > _MAX_TEXT_CHARS:
+        attachment_text = attachment_text[:_MAX_TEXT_CHARS]
 
     prior   = messages.get_messages(uid, session_id)
     history = [{"role": m["role"], "content": m["content"]} for m in prior]
