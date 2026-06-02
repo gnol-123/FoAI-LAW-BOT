@@ -74,13 +74,16 @@ html.dark {
   width: 1.875rem;
   height: 1.875rem;
   border-radius: 0.5rem;
-  background: #312e81;
+  background: #4f46e5;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 0.9375rem;
+  font-weight: 800;
+  color: white;
   flex-shrink: 0;
   margin-top: 0.125rem;
+  user-select: none;
 }
 
 .msg-assistant-body {

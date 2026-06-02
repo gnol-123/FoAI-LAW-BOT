@@ -486,7 +486,7 @@ function appendMessage(role, content, thinking = "", isThinking = false) {
 
     const icon = document.createElement("div");
     icon.className = "msg-icon";
-    icon.textContent = "⚖️";
+    icon.textContent = "L";
 
     const body = document.createElement("div");
     body.className = "msg-assistant-body";

@@ -1,10 +1,13 @@
+import logging
 import os
 import re
 
 from langchain_together import ChatTogether
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
+
+log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are LoRAai, a legal research AI specialising in Australian and international law. \
 You help lawyers, law students, and individuals understand legal concepts, research case law, \
@@ -24,19 +27,18 @@ and analyse statutes.
 - Do NOT use 📄 or any emoji as footnote or citation markers — citations are plain text only
 - Do NOT use `<sub>`, `<sup>`, or HTML tags in your response
 
-## Format your response EXACTLY like this:
+## Mandatory output format
+You MUST structure every response exactly as shown below — no exceptions:
+
 <thinking>
-[Step-by-step legal reasoning: identify the question, relevant law, jurisdiction, analysis, uncertainties]
+[Your step-by-step legal reasoning: identify the question, relevant law, jurisdiction, analysis, uncertainties]
 </thinking>
 <answer>
 [Your complete, well-formatted Markdown answer]
-</answer>
-
-
-"""
+</answer>"""
 
 _llm = None
-_title_chain = None
+_title_llm = None
 
 
 def _get_llm() -> ChatTogether:
@@ -51,18 +53,16 @@ def _get_llm() -> ChatTogether:
 
 
 def _parse_response(raw: str) -> tuple[str, str]:
-    """Extract <thinking> and <answer> blocks. Falls back gracefully if tags are missing."""
-    thinking_match = re.search(r"<thinking>(.*?)</thinking>", raw, re.DOTALL)
-    answer_match   = re.search(r"<answer>(.*?)</answer>",     raw, re.DOTALL)
+    """Extract <thinking> and <answer> blocks (case-insensitive). Falls back gracefully."""
+    thinking_match = re.search(r"<thinking>(.*?)</thinking>", raw, re.DOTALL | re.IGNORECASE)
+    answer_match   = re.search(r"<answer>(.*?)</answer>",     raw, re.DOTALL | re.IGNORECASE)
 
     thinking = thinking_match.group(1).strip() if thinking_match else ""
     answer   = answer_match.group(1).strip()   if answer_match   else ""
 
-    # If the model produced empty <answer> tags, strip the structural tags and
-    # use whatever text remains (the model put its answer outside the tags).
     if not answer:
-        cleaned = re.sub(r"<thinking>.*?</thinking>", "", raw, flags=re.DOTALL)
-        cleaned = re.sub(r"</?answer>", "", cleaned).strip()
+        cleaned = re.sub(r"<thinking>.*?</thinking>", "", raw, flags=re.DOTALL | re.IGNORECASE)
+        cleaned = re.sub(r"</?answer>", "", cleaned, flags=re.IGNORECASE).strip()
         answer  = cleaned or thinking or raw.strip()
 
     return thinking, answer
@@ -75,7 +75,10 @@ def run(
 ) -> tuple[str, str, list[dict], int]:
     """
     Returns (thinking, answer, sources, tokens_used).
-    tokens_used is the total input+output token count reported by the API.
+
+    Uses assistant prefill (<thinking> as the last message) so the model is
+    forced to start its response inside the thinking block — guaranteeing the
+    chain-of-thought is always present.
     """
     lc_history = [
         HumanMessage(content=m["content"]) if m["role"] == "user"
@@ -95,45 +98,43 @@ def run(
             + excerpts
         )
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system),
-        MessagesPlaceholder("history"),
-        ("human", "{question}"),
-    ])
+    # Build message list directly so we can append the assistant prefill.
+    # Passing an incomplete AIMessage as the last message tells Together AI
+    # to continue generating from that point — guaranteeing <thinking> appears.
+    messages = [
+        SystemMessage(content=system),
+        *lc_history,
+        HumanMessage(content=question),
+        AIMessage(content="<thinking>\n"),   # assistant prefill
+    ]
 
-    # Invoke without StrOutputParser so we keep the AIMessage (for usage metadata)
-    ai_msg = (prompt | _get_llm()).invoke(
-        {"question": question, "history": lc_history}
-    )
-    raw = ai_msg.content
+    ai_msg = _get_llm().invoke(messages)
 
-    # Together AI returns usage in usage_metadata; fall back to char estimate
+    # Reconstruct full raw text: the model continued from after "<thinking>\n"
+    raw = "<thinking>\n" + (ai_msg.content or "")
+    log.debug(f"[LLM] raw response ({len(raw)} chars): {raw[:300]!r}")
+
     usage       = getattr(ai_msg, "usage_metadata", None) or {}
     tokens_used = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
     if not tokens_used:
-        tokens_used = (len(question) + len(raw)) // 4
+        tokens_used = len(raw) // 4
 
     thinking, answer = _parse_response(raw)
     return thinking, answer, context_chunks or [], tokens_used
 
 
-def _get_title_chain():
-    global _title_chain
-    if _title_chain is None:
-        llm = ChatTogether(
+def generate_title(first_message: str) -> str:
+    global _title_llm
+    if _title_llm is None:
+        _title_llm = ChatTogether(
             model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
             api_key=os.environ["TOGETHER_API_KEY"],
             temperature=0.3,
             max_tokens=15,
         )
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "Generate a concise chat title (3–6 words) for a legal research conversation based on the user's first message. Return ONLY the title — no quotes, no punctuation at the end."),
-            ("human", "{message}"),
-        ])
-        _title_chain = prompt | llm | StrOutputParser()
-    return _title_chain
-
-
-def generate_title(first_message: str) -> str:
-    title = _get_title_chain().invoke({"message": first_message})
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "Generate a concise chat title (3–6 words) for a legal research conversation based on the user's first message. Return ONLY the title — no quotes, no punctuation at the end."),
+        ("human", "{message}"),
+    ])
+    title = (prompt | _title_llm | StrOutputParser()).invoke({"message": first_message})
     return title.strip().strip('"').strip("'")
