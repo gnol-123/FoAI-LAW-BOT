@@ -46,9 +46,13 @@ def _get_llm() -> ChatTogether:
     global _llm
     if _llm is None:
         _llm = ChatTogether(
-            # Qwen follows the mandatory <thinking>/<answer> format more reliably
-            # than Llama while keeping comparable latency on Together's Turbo tier.
-            model="Qwen/Qwen2.5-72B-Instruct-Turbo",
+            # Qwen3-235B (MoE, ~22B active) follows the mandatory <thinking>/<answer>
+            # format more reliably than Llama. Use the "-tput" throughput endpoint:
+            # it is the serverless tier — the plain 72B / fp8 / QwQ variants require
+            # a paid *dedicated* endpoint on Together and 400 otherwise. This is the
+            # non-thinking "Instruct" variant, which is correct here because we drive
+            # the reasoning ourselves via the <thinking> assistant prefill.
+            model="Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
             api_key=os.environ["TOGETHER_API_KEY"],
             temperature=0,
             # Together is OpenAI-compatible: ask for usage in the final stream
@@ -74,8 +78,8 @@ def _parse_response(raw: str) -> tuple[str, str]:
     return thinking, answer
 
 
-# Tags the model emits around its two sections (it continues from the
-# "<thinking>\n" prefill, so the opening <thinking> never appears in the stream).
+# Tags the model emits around its two sections.
+_THINK_OPEN   = "<thinking>"
 _THINK_CLOSE  = "</thinking>"
 _ANSWER_OPEN  = "<answer>"
 _ANSWER_CLOSE = "</answer>"
@@ -101,12 +105,15 @@ def _build_messages(
     context_chunks: list[dict] | None = None,
 ) -> list:
     """
-    Build the LangChain message list, ending with an assistant prefill.
+    Build the LangChain message list (system + history + question).
 
-    Passing an incomplete AIMessage (``<thinking>\\n``) as the last message tells
-    Together AI to *continue* generating from that point — guaranteeing the
-    response starts inside the thinking block, so the chain-of-thought is always
-    present. Shared by both run() and stream_response().
+    The model is instructed (SYSTEM_PROMPT) to wrap its reply in
+    <thinking>…</thinking><answer>…</answer>; both run() and stream_response()
+    parse those sections out.
+
+    We deliberately do NOT use an assistant "<thinking>" prefill: Together's
+    trailing-assistant continuation is model-specific — Qwen re-emits its own
+    opening <thinking>, producing a doubled tag — so we let the model open it.
     """
     lc_history = [
         HumanMessage(content=m["content"]) if m["role"] == "user"
@@ -130,7 +137,6 @@ def _build_messages(
         SystemMessage(content=system),
         *lc_history,
         HumanMessage(content=question),
-        AIMessage(content="<thinking>\n"),   # assistant prefill
     ]
 
 
@@ -148,8 +154,7 @@ def run(
     messages = _build_messages(question, history, context_chunks)
     ai_msg = _get_llm().invoke(messages)
 
-    # Reconstruct full raw text: the model continued from after "<thinking>\n"
-    raw = "<thinking>\n" + (ai_msg.content or "")
+    raw = ai_msg.content or ""
     log.debug(f"[LLM] raw response ({len(raw)} chars): {raw[:300]!r}")
 
     usage       = getattr(ai_msg, "usage_metadata", None) or {}
@@ -182,11 +187,12 @@ def stream_response(
     """
     messages = _build_messages(question, history, context_chunks)
 
-    state      = "thinking"          # thinking → between → answer → done
+    state      = "open"              # open → thinking → between → answer → done
     buf        = ""
-    raw_parts  = ["<thinking>\n"]    # mirrors the prefill, for the final parse
+    raw_parts  = []                  # full model output, for the final parse
     real_tokens = 0
-    answer_started = False           # to trim newline(s) right after <answer>
+    thinking_started = False         # to trim newline(s) right after <thinking>
+    answer_started   = False         # to trim newline(s) right after <answer>
 
     for chunk in _get_llm().stream(messages):
         # Usage metadata rides along on the final chunk (stream_usage=True).
@@ -206,16 +212,31 @@ def stream_response(
         while advanced:
             advanced = False
 
-            if state == "thinking":
+            if state == "open":
+                # Discard everything up to and including the opening <thinking>.
+                i = buf.find(_THINK_OPEN)
+                if i != -1:
+                    buf = buf[i + len(_THINK_OPEN):].lstrip("\r\n")
+                    state, advanced = "thinking", True
+                else:
+                    # Hold a possible partial "<thinking>" tail; drop any preamble.
+                    tail = _hold_back(buf, _THINK_OPEN)
+                    buf = buf[len(buf) - tail:] if tail else ""
+
+            elif state == "thinking":
+                if not thinking_started:
+                    buf = buf.lstrip("\r\n")
                 i = buf.find(_THINK_CLOSE)
                 if i != -1:
                     head, buf = buf[:i], buf[i + len(_THINK_CLOSE):]
                     if head:
+                        thinking_started = True
                         yield {"type": "thinking", "text": head}
                     state, advanced = "between", True
                 else:
                     keep = len(buf) - _hold_back(buf, _THINK_CLOSE)
                     if keep > 0:
+                        thinking_started = True
                         yield {"type": "thinking", "text": buf[:keep]}
                         buf = buf[keep:]
 
@@ -249,8 +270,10 @@ def stream_response(
             # state == "done": ignore any trailing content after </answer>
 
     # Flush any held-back tail (model stopped before closing its tags).
-    if state == "thinking" and buf:
-        yield {"type": "thinking", "text": buf}
+    if state == "thinking":
+        tail = buf if thinking_started else buf.lstrip("\r\n")
+        if tail:
+            yield {"type": "thinking", "text": tail}
     elif state == "answer":
         tail = buf if answer_started else buf.lstrip("\r\n")
         if tail:
