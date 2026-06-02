@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are LoRAai, a legal research AI specialising in Australian and international law. \
+SYSTEM_PROMPT = """You are LoRRAai, a legal research AI specialising in Australian and international law. \
 You help lawyers, law students, and individuals understand legal concepts, research case law, \
 and analyse statutes.
 

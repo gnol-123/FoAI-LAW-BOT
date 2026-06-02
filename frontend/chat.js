@@ -13,6 +13,8 @@ const auth        = getAuth(firebaseApp);
 const storage     = getStorage(firebaseApp);
 
 let currentSessionId = null;
+let _batchRender = false;   // when true, appendMessage skips its per-row scroll
+let isAdmin = false;        // managing the shared doc corpus is admin-only (server-enforced)
 
 // ── DOM refs ───────────────────────────────────────────────────────────────────
 const chatView        = document.getElementById("chat-view");
@@ -65,6 +67,7 @@ onAuthStateChanged(auth, async (user) => {
   chatView.style.display  = "flex";
   applySidebar();
   await ensureUserDoc();
+  await loadUserMeta();
   await loadSessions();
   await fetchTokenStatus();
 });
@@ -262,6 +265,26 @@ async function ensureUserDoc() {
   } catch { /* already exists — non-fatal */ }
 }
 
+// Fetch the current user's profile to learn whether they may manage the shared
+// document corpus. This only drives the UI — the backend enforces admin access
+// on every document mutation regardless of what the client shows.
+async function loadUserMeta() {
+  try {
+    const me = await api("GET", "/users/me");
+    isAdmin = !!me.isAdmin;
+  } catch {
+    isAdmin = false;
+  }
+  applyAdminUI();
+}
+
+function applyAdminUI() {
+  // Upload control is admin-only; hide it (and any delete buttons) for everyone
+  // else so they aren't shown actions the server would reject with 403.
+  const uploadLabel = document.getElementById("doc-upload")?.closest("label");
+  if (uploadLabel) uploadLabel.style.display = isAdmin ? "" : "none";
+}
+
 // ── Sidebar tabs ───────────────────────────────────────────────────────────────
 tabChats.addEventListener("click", () => switchTab("chats"));
 tabDocs.addEventListener("click",  () => switchTab("docs"));
@@ -346,14 +369,19 @@ function buildDocRow(doc) {
   info.appendChild(name);
   info.appendChild(meta);
 
-  const delBtn = document.createElement("button");
-  delBtn.className = "hidden group-hover:block flex-shrink-0 p-1 text-slate-500 hover:text-red-400 rounded transition-colors";
-  delBtn.textContent = "✕";
-  delBtn.title = "Delete document";
-  delBtn.addEventListener("click", () => deleteDoc(doc.documentId, row));
-
   row.appendChild(info);
-  row.appendChild(delBtn);
+
+  // Deletion is admin-only (enforced server-side); only render the control for
+  // admins so other users don't get a button that 403s.
+  if (isAdmin) {
+    const delBtn = document.createElement("button");
+    delBtn.className = "hidden group-hover:block flex-shrink-0 p-1 text-slate-500 hover:text-red-400 rounded transition-colors";
+    delBtn.textContent = "✕";
+    delBtn.title = "Delete document";
+    delBtn.addEventListener("click", () => deleteDoc(doc.documentId, row));
+    row.appendChild(delBtn);
+  }
+
   return row;
 }
 
@@ -468,14 +496,107 @@ newSessionBtn.addEventListener("click", async () => {
   }
 });
 
+// In-memory cache of loaded message lists, keyed by sessionId. Re-opening a
+// previously viewed chat renders instantly from here instead of waiting on a
+// network round-trip; a background revalidation keeps it correct. Entries are
+// invalidated when the session's messages change (send / delete).
+const messageCache = new Map();
+
 async function openSession(sessionId) {
   currentSessionId = sessionId;
-  clearMessages();
   highlightSession(sessionId);
-  const msgs = await api("GET", `/sessions/${sessionId}/messages`);
-  if (currentSessionId !== sessionId) return;
-  for (const m of msgs) appendMessage(m.role, m.content, "", m.attachmentName ?? null, null);
+
+  const cached = messageCache.get(sessionId);
+  if (cached) {
+    renderMessages(cached);              // instant paint from cache
+    revalidateSession(sessionId);        // silently confirm it's still current
+    return;
+  }
+
+  clearMessages();
+  showMessagesLoading();
+  try {
+    const msgs = await api("GET", `/sessions/${sessionId}/messages`);
+    if (currentSessionId !== sessionId) return;   // user switched away mid-load
+    messageCache.set(sessionId, msgs);
+    renderMessages(msgs);
+  } catch (err) {
+    if (currentSessionId === sessionId) {
+      clearMessages();          // remove the skeleton, restore the empty state
+      showBanner("Could not load messages: " + err.message);
+    }
+  }
+}
+
+// Background re-fetch for a cached session. Re-renders only if the content
+// actually changed (e.g. edited from another tab) and we're still viewing it,
+// so the common "nothing changed" case causes no flicker.
+async function revalidateSession(sessionId) {
+  try {
+    const fresh = await api("GET", `/sessions/${sessionId}/messages`);
+    const prev  = messageCache.get(sessionId);
+    messageCache.set(sessionId, fresh);
+    if (currentSessionId === sessionId && !sameMessages(prev, fresh)) {
+      renderMessages(fresh);
+    }
+  } catch { /* offline / transient — keep showing the cached copy */ }
+}
+
+function sameMessages(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].role !== b[i].role
+        || a[i].content !== b[i].content
+        || (a[i].attachmentName ?? null) !== (b[i].attachmentName ?? null)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Paint a full message list into the chat pane in one batch — suppress the
+// per-message auto-scroll (N reflows) and scroll just once at the end.
+function renderMessages(msgs) {
+  hideMessagesLoading();
+  clearMessages();
+  _batchRender = true;
+  try {
+    for (const m of msgs) appendMessage(m.role, m.content, "", m.attachmentName ?? null, null);
+  } finally {
+    _batchRender = false;
+  }
   scrollToBottom();
+}
+
+// Animated skeleton shown while a chat's history is fetched over the network.
+function showMessagesLoading() {
+  hideMessagesLoading();
+  emptyState.style.display = "none";
+  const sk = document.createElement("div");
+  sk.id = "messages-loading";
+  sk.innerHTML = `${skelRow("assistant")}${skelRow("user")}${skelRow("assistant")}`;
+  messagesEl.appendChild(sk);
+}
+
+function hideMessagesLoading() {
+  document.getElementById("messages-loading")?.remove();
+}
+
+function skelRow(role) {
+  const icon = role === "assistant"
+    ? '<div class="skel-icon skel-shimmer"></div>' : "";
+  return `
+    <div class="msg-row msg-${role}">
+      <div class="msg-inner">
+        ${icon}
+        <div class="skel-body ${role}">
+          <div class="skel-line skel-shimmer" style="width:30%"></div>
+          <div class="skel-line skel-shimmer" style="width:92%"></div>
+          <div class="skel-line skel-shimmer" style="width:78%"></div>
+          <div class="skel-line skel-shimmer" style="width:55%"></div>
+        </div>
+      </div>
+    </div>`;
 }
 
 function highlightSession(sessionId) {
@@ -494,6 +615,7 @@ async function deleteSession(sessionId, rowEl) {
   if (!await showConfirm("Delete this chat? This cannot be undone.")) return;
   try {
     await api("DELETE", `/sessions/${sessionId}`);
+    messageCache.delete(sessionId);
     rowEl.remove();
     if (currentSessionId === sessionId) {
       currentSessionId = null;
@@ -523,6 +645,7 @@ async function sendMessage() {
 
   _sending = true;
   sendBtn.disabled = true;
+  let sentSessionId = null;
 
   try {
     if (!currentSessionId) {
@@ -548,6 +671,7 @@ async function sendMessage() {
     appendMessage("user", text, "", pendingAttachment?.filename ?? null, pendingAttachment?.type ?? null);
 
     const sessionId = currentSessionId;
+    sentSessionId   = sessionId;   // this chat's history will change → invalidate cache
     const stream    = createStreamingAssistantMessage();
 
     try {
@@ -589,6 +713,9 @@ async function sendMessage() {
   } finally {
     _sending = false;
     sendBtn.disabled = false;
+    // The exchange added messages to this chat — drop its cached copy so the
+    // next time it's opened the new turn is fetched fresh.
+    if (sentSessionId) messageCache.delete(sentSessionId);
     scrollToBottom();
   }
 }
@@ -663,7 +790,7 @@ function createStreamingAssistantMessage() {
 
   const label = document.createElement("div");
   label.className = "msg-sender";
-  label.textContent = "LoRAai";
+  label.textContent = "LoRRAai";
   body.appendChild(label);
 
   const status = document.createElement("div");
@@ -811,7 +938,7 @@ function appendMessage(role, content, thinking = "", attachmentName = null, atta
 
     inner.appendChild(body);
     messagesEl.appendChild(row);
-    scrollToBottom();
+    if (!_batchRender) scrollToBottom();
     return row;
   }
 
@@ -826,7 +953,7 @@ function appendMessage(role, content, thinking = "", attachmentName = null, atta
 
   const label = document.createElement("div");
   label.className = "msg-sender";
-  label.textContent = "LoRAai";
+  label.textContent = "LoRRAai";
   body.appendChild(label);
 
   if (thinking) {
@@ -857,7 +984,7 @@ function appendMessage(role, content, thinking = "", attachmentName = null, atta
   inner.appendChild(icon);
   inner.appendChild(body);
   messagesEl.appendChild(row);
-  scrollToBottom();
+  if (!_batchRender) scrollToBottom();
   return row;
 }
 
@@ -900,7 +1027,7 @@ function showConfirm(message) {
 }
 
 function showBanner(msg) {
-  console.error("[LoRAai]", msg);
+  console.error("[LoRRAai]", msg);
   let banner = document.getElementById("error-banner");
   if (!banner) {
     banner = document.createElement("div");

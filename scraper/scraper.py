@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://www.legislation.gov.au"
 API_BASE = "https://api.prod.legislation.gov.au/v1"
 USER_AGENT = (
-    "LoRAai-Legal-Research/1.0 "
+    "LoRRAai-Legal-Research/1.0 "
     "(polite educational scraper; github.com/your-repo; "
     "contact: your@email.com)"
 )

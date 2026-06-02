@@ -50,6 +50,21 @@ def _serialize(data: dict) -> dict:
     }
 
 
-def get_messages(user_id: str, session_id: str) -> list[dict]:
-    docs = _messages_ref(user_id, session_id).order_by("timestamp").stream()
+def get_messages(
+    user_id: str,
+    session_id: str,
+    include_attachments: bool = True,
+) -> list[dict]:
+    """
+    Return a session's messages ordered by time.
+
+    include_attachments=False projects out the heavy `attachmentText` field
+    (up to 50k chars per message) at the Firestore level so it is never read
+    or transferred. The chat endpoint needs the text to rebuild LLM context,
+    but the frontend message-list endpoint does not — there it's pure waste.
+    """
+    query = _messages_ref(user_id, session_id).order_by("timestamp")
+    if not include_attachments:
+        query = query.select(["role", "content", "timestamp", "sources", "attachmentName"])
+    docs = query.stream()
     return [{"messageId": d.id, **_serialize(d.to_dict())} for d in docs]

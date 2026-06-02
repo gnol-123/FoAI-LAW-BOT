@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from firebase_admin import auth
 from flask import Flask, Response, g, jsonify, request
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
 from agent import chain as agent
 from db import chat_sessions, messages, users
@@ -22,7 +23,47 @@ app = Flask(__name__)
 # Werkzeug rejects bodies larger than this before they reach any view,
 # so oversized uploads never fully allocate memory.  Matches _MAX_FILE_BYTES.
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
-CORS(app)
+
+# ── CORS ───────────────────────────────────────────────────────────────────
+# Only known frontend origins may call the API from a browser, instead of the
+# wide-open default. Override with ALLOWED_ORIGINS (comma-separated) in prod.
+_DEFAULT_ORIGINS = [
+    "https://law-agenetic-research-ai.web.app",
+    "https://law-agenetic-research-ai.firebaseapp.com",
+    "http://localhost:5000", "http://127.0.0.1:5000",
+    "http://localhost:5500", "http://127.0.0.1:5500",
+]
+_origins_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
+_allowed_origins = (
+    [o.strip() for o in _origins_env.split(",") if o.strip()]
+    if _origins_env else _DEFAULT_ORIGINS
+)
+CORS(app, origins=_allowed_origins, max_age=3600)
+
+
+@app.after_request
+def _security_headers(resp):
+    # Conservative defaults on every response; individual views may override.
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    # Private user data must not be retained by shared/proxy caches. The SSE
+    # stream sets its own Cache-Control, so setdefault leaves it untouched.
+    resp.headers.setdefault("Cache-Control", "no-store")
+    return resp
+
+
+# ── Admin authorisation ────────────────────────────────────────────────────
+# Managing the shared RAG corpus (upload / delete / sync) is privileged: a
+# regular user must not be able to wipe or poison the knowledge base that every
+# other user queries. Admins are identified by a Firebase custom claim or a
+# UID allow-list passed via the ADMIN_UIDS env var (comma-separated).
+def _admin_uids() -> set:
+    return {u.strip() for u in os.environ.get("ADMIN_UIDS", "").split(",") if u.strip()}
+
+
+def _is_admin(user: dict) -> bool:
+    return bool(user.get("admin")) or user.get("uid") in _admin_uids()
 
 
 # ---------------------------------------------------------------------------
@@ -49,8 +90,16 @@ def sync_from_storage() -> None:
 
         bucket = fb_storage.bucket()
 
-        # Scan all prefixes where the scraper may have uploaded PDFs
-        prefixes = ["uploads/", "legislation/"]
+        # Only the curated legislation corpus and admin-uploaded PDFs feed the
+        # shared RAG index. A regular user's uploads/{uid}/ space is private to
+        # them and must NEVER be ingested into the knowledge base every user
+        # queries — otherwise any verified user could poison legal results.
+        prefixes = ["legislation/"]
+        admin_uids = _admin_uids()
+        for admin_uid in admin_uids:
+            prefixes.append(f"uploads/{admin_uid}/")
+        if not admin_uids:
+            print("[sync] WARNING: ADMIN_UIDS not set — only 'legislation/' indexed")
         blobs = []
         for prefix in prefixes:
             blobs.extend(bucket.list_blobs(prefix=prefix))
@@ -120,9 +169,27 @@ def require_auth(f):
         if not token:
             return jsonify({"error": "Missing Authorization header"}), 401
         try:
+            # Any verification failure — malformed, expired, bad signature, or a
+            # ValueError on a non-token string — must fall through to 401, never
+            # a 500 that could leak internals or be used to probe the server.
             g.user = auth.verify_id_token(token)
-        except auth.InvalidIdTokenError:
+        except Exception:
             return jsonify({"error": "Invalid or expired token"}), 401
+        # Defense in depth: the Storage rules already require a verified email;
+        # enforce the same at the API layer so an unverified account cannot reach
+        # any user data even if it somehow holds a valid ID token.
+        if not g.user.get("email_verified", False):
+            return jsonify({"error": "Email not verified"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def require_admin(f):
+    """Stack directly BELOW @require_auth — relies on g.user already being set."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not _is_admin(g.user):
+            return jsonify({"error": "forbidden"}), 403
         return f(*args, **kwargs)
     return decorated
 
@@ -143,15 +210,15 @@ def health():
 @app.post("/users")
 @require_auth
 def create_user():
-    uid = g.user["uid"]
-    body = request.get_json(force=True)
+    uid  = g.user["uid"]
+    body = request.get_json(silent=True) or {}
+    # Trust the verified identity from the token — never a client-supplied email,
+    # which could be spoofed to mismatch the authenticated account. Plan is fixed
+    # server-side so a client cannot self-assign a privileged plan.
+    email    = g.user.get("email", "")
+    username = (body.get("username") or (email.split("@")[0] if email else "user")).strip()[:100]
     try:
-        user = users.create_user(
-            user_id=uid,
-            username=body["username"],
-            email=body["email"],
-            plan=body.get("plan", "free"),
-        )
+        user = users.create_user(user_id=uid, username=username, email=email, plan="free")
         return jsonify(user), 201
     except ValueError:
         return jsonify({"error": "already_exists"}), 409
@@ -163,6 +230,7 @@ def get_me():
     user = users.get_user(g.user["uid"])
     if user is None:
         return jsonify({"error": "User not found"}), 404
+    user["isAdmin"] = _is_admin(g.user)
     return jsonify(user)
 
 
@@ -179,12 +247,12 @@ def list_sessions():
 @app.post("/sessions")
 @require_auth
 def create_session():
-    body = request.get_json(force=True)
+    body = request.get_json(silent=True) or {}
     session = chat_sessions.create_session(
         user_id=g.user["uid"],
-        title=body.get("title", "New conversation"),
-        jurisdiction=body.get("jurisdiction", ""),
-        practice_area=body.get("practiceArea", ""),
+        title=(body.get("title") or "New conversation").strip()[:200],
+        jurisdiction=(body.get("jurisdiction") or "").strip()[:100],
+        practice_area=(body.get("practiceArea") or "").strip()[:100],
     )
     return jsonify(session), 201
 
@@ -208,8 +276,8 @@ def delete_session(session_id):
 @app.patch("/sessions/<session_id>")
 @require_auth
 def rename_session(session_id):
-    body = request.get_json(force=True)
-    title = body.get("title", "").strip()
+    body  = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()[:200]
     if not title:
         return jsonify({"error": "title is required"}), 400
     chat_sessions.update_session(g.user["uid"], session_id, {"title": title})
@@ -223,24 +291,30 @@ def rename_session(session_id):
 @app.get("/sessions/<session_id>/messages")
 @require_auth
 def get_messages(session_id):
-    msgs = messages.get_messages(g.user["uid"], session_id)
-    # Strip server-side attachment text — it's reconstructed into the LLM prompt
-    # internally and is too large (up to 50k chars) to send back to the frontend.
-    for m in msgs:
-        m.pop("attachmentText", None)
+    # Project out attachmentText at the DB level — it's reconstructed into the
+    # LLM prompt server-side and is far too large (up to 50k chars/message) to
+    # ship to the browser, which never uses it.
+    msgs = messages.get_messages(g.user["uid"], session_id, include_attachments=False)
     return jsonify(msgs)
 
 
 @app.post("/sessions/<session_id>/messages")
 @require_auth
 def add_message(session_id):
-    body = request.get_json(force=True)
+    body    = request.get_json(silent=True) or {}
+    role    = body.get("role")
+    content = body.get("content")
+    if role not in ("user", "assistant"):
+        return jsonify({"error": "role must be 'user' or 'assistant'"}), 400
+    if not isinstance(content, str) or not content.strip():
+        return jsonify({"error": "content is required"}), 400
+    sources = body.get("sources")
     message = messages.add_message(
         user_id=g.user["uid"],
         session_id=session_id,
-        role=body["role"],
-        content=body["content"],
-        sources=body.get("sources"),
+        role=role,
+        content=content[:20000],
+        sources=sources if isinstance(sources, list) else None,
     )
     return jsonify(message), 201
 
@@ -347,9 +421,13 @@ def upload_context_file():
         else:                           # image — uses the vision LLM
             text, vision_tokens = _describe_image(file_bytes, ext)
             file_type = "image"
-    except Exception as exc:
-        app.logger.exception(f"[context-file] processing failed: {filename}")
+    except ValueError as exc:
+        # Raised deliberately with a user-facing message (e.g. scanned PDF).
         return jsonify({"error": str(exc)}), 422
+    except Exception:
+        # Don't echo internal exception text to the client — log it instead.
+        app.logger.exception(f"[context-file] processing failed: {filename}")
+        return jsonify({"error": "Could not process this file. Please try a different one."}), 422
 
     # Charge vision token usage to the user's budget.
     if vision_tokens:
@@ -379,8 +457,8 @@ def _sse(payload: dict) -> str:
 @app.post("/sessions/<session_id>/chat")
 @require_auth
 def chat(session_id):
-    body = request.get_json(force=True)
-    question = body.get("message", "").strip()
+    body = request.get_json(silent=True) or {}
+    question = (body.get("message") or "").strip()
     if not question:
         return jsonify({"error": "message is required"}), 400
 
@@ -533,6 +611,7 @@ def token_status_route():
 
 @app.post("/documents/sync")
 @require_auth
+@require_admin
 def trigger_sync():
     """Manually trigger a storage sync (e.g. right after a direct upload)."""
     sync_from_storage()
@@ -542,22 +621,36 @@ def trigger_sync():
 @app.get("/documents")
 @require_auth
 def list_docs():
-    return jsonify(documents_db.list_documents())
+    # Expose only non-sensitive fields. Uploader UIDs and internal storage paths
+    # must not leak to other users via the shared document list.
+    safe = [
+        {
+            "documentId": d.get("documentId"),
+            "filename":   d.get("filename"),
+            "status":     d.get("status"),
+            "chunkCount": d.get("chunkCount", 0),
+            "uploadedAt": d.get("uploadedAt"),
+        }
+        for d in documents_db.list_documents()
+    ]
+    return jsonify(safe)
 
 
 @app.post("/documents/upload")
 @require_auth
+@require_admin
 def upload_document():
     if "file" not in request.files:
         return jsonify({"error": "file is required"}), 400
 
     file = request.files["file"]
-    if not file.filename.lower().endswith(".pdf"):
+    # Sanitise the client-supplied name before it becomes a storage object path.
+    filename = secure_filename(file.filename or "")
+    if not filename.lower().endswith(".pdf"):
         return jsonify({"error": "Only PDF files are supported"}), 400
 
     uid      = g.user["uid"]
     doc_id   = str(uuid.uuid4())
-    filename = file.filename
     storage_path = f"documents/{doc_id}/{filename}"
     file_bytes   = file.read()
 
@@ -588,13 +681,15 @@ def upload_document():
         doc.update({"status": "ready", "chunkCount": chunk_count})
     except Exception as e:
         documents_db.update_document(doc_id, {"status": "error", "error": str(e)})
-        return jsonify({"error": str(e)}), 500
+        app.logger.exception(f"[documents] ingest failed: {filename}")
+        return jsonify({"error": "Failed to process document"}), 500
 
     return jsonify(doc), 201
 
 
 @app.delete("/documents/<doc_id>")
 @require_auth
+@require_admin
 def delete_doc(doc_id):
     doc = documents_db.get_document(doc_id)
     if not doc:
@@ -622,4 +717,6 @@ def delete_doc(doc_id):
 if __name__ == "__main__":
     # threaded=True so a streaming /chat response doesn't block other requests
     # (e.g. token-status polling) on the single-process dev server.
-    app.run(debug=True, threaded=True)
+    # Debugger is OFF unless FLASK_DEBUG=1 — the Werkzeug debugger exposes an
+    # interactive console (arbitrary code execution) and must never run in prod.
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)
