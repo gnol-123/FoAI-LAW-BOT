@@ -256,7 +256,7 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
     for i, page in enumerate(reader.pages, 1):
         text = (page.extract_text() or "").strip()
         if text:
-            pages.append(f"[Page {i}]\n{text}")
+            pages.append(f"--- Page {i} ---\n{text}")
     if not pages:
         raise ValueError(
             "No extractable text found — the PDF may be scanned or image-based. "

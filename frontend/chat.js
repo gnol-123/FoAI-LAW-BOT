@@ -540,9 +540,10 @@ async function sendMessage() {
     userInput.value = "";
     userInput.style.height = "auto";
 
-    // Snapshot and clear the attachment so it is shown once and not re-sent.
+    // Snapshot the current attachment for this message.
+    // Intentionally NOT cleared — the file stays attached across the whole
+    // conversation until the user explicitly removes it with ✕.
     const pendingAttachment = attachment;
-    clearAttachment();
 
     appendMessage("user", text, "", pendingAttachment?.filename ?? null, pendingAttachment?.type ?? null);
 
