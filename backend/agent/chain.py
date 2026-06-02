@@ -103,6 +103,8 @@ def _build_messages(
     question: str,
     history: list[dict],
     context_chunks: list[dict] | None = None,
+    attachment_text: str = "",
+    attachment_name: str = "",
 ) -> list:
     """
     Build the LangChain message list (system + history + question).
@@ -133,10 +135,23 @@ def _build_messages(
             + excerpts
         )
 
+    # Append attachment content to the user's question so the model can reason
+    # over the document. The separator makes the boundary visually explicit.
+    if attachment_text:
+        label = attachment_name or "attached file"
+        user_content = (
+            f"{question}\n\n"
+            f"---\n"
+            f"**Attached: {label}**\n\n"
+            f"{attachment_text}"
+        )
+    else:
+        user_content = question
+
     return [
         SystemMessage(content=system),
         *lc_history,
-        HumanMessage(content=question),
+        HumanMessage(content=user_content),
     ]
 
 
@@ -144,6 +159,8 @@ def run(
     question: str,
     history: list[dict],
     context_chunks: list[dict] | None = None,
+    attachment_text: str = "",
+    attachment_name: str = "",
 ) -> tuple[str, str, list[dict], int]:
     """
     Returns (thinking, answer, sources, tokens_used).
@@ -151,7 +168,7 @@ def run(
     Non-streaming variant — used for background tasks. The live chat endpoint
     uses stream_response() instead.
     """
-    messages = _build_messages(question, history, context_chunks)
+    messages = _build_messages(question, history, context_chunks, attachment_text, attachment_name)
     ai_msg = _get_llm().invoke(messages)
 
     raw = ai_msg.content or ""
@@ -170,6 +187,8 @@ def stream_response(
     question: str,
     history: list[dict],
     context_chunks: list[dict] | None = None,
+    attachment_text: str = "",
+    attachment_name: str = "",
 ) -> Generator[dict, None, None]:
     """
     Stream the model response as it is generated, splitting the <thinking> and
@@ -185,7 +204,7 @@ def stream_response(
     The XML tags are stripped from the deltas and never split across events,
     even when a tag straddles two stream chunks.
     """
-    messages = _build_messages(question, history, context_chunks)
+    messages = _build_messages(question, history, context_chunks, attachment_text, attachment_name)
 
     state      = "open"              # open → thinking → between → answer → done
     buf        = ""

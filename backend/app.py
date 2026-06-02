@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 import os
 import uuid
@@ -235,6 +237,101 @@ def add_message(session_id):
 
 
 # ---------------------------------------------------------------------------
+# Attachment / context-file processing
+# ---------------------------------------------------------------------------
+
+_ACCEPTED_EXTS = {"pdf", "png", "jpg", "jpeg", "gif", "webp", "md", "markdown", "txt"}
+_MAX_FILE_BYTES = 20 * 1024 * 1024   # 20 MB
+_MAX_TEXT_CHARS = 50_000             # ~12.5k tokens — large but bounded
+
+
+def _extract_pdf_text(file_bytes: bytes) -> str:
+    from pypdf import PdfReader
+    reader = PdfReader(io.BytesIO(file_bytes))
+    pages = []
+    for i, page in enumerate(reader.pages, 1):
+        text = (page.extract_text() or "").strip()
+        if text:
+            pages.append(f"[Page {i}]\n{text}")
+    if not pages:
+        raise ValueError(
+            "No extractable text found — the PDF may be scanned or image-based. "
+            "Try uploading the original document or a text-layer PDF."
+        )
+    return "\n\n".join(pages)
+
+
+def _describe_image(file_bytes: bytes, ext: str) -> str:
+    from langchain_together import ChatTogether
+    from langchain_core.messages import HumanMessage as LCHuman
+
+    mime_map = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "gif": "gif", "webp": "webp"}
+    mime = f"image/{mime_map.get(ext, ext)}"
+    b64  = base64.b64encode(file_bytes).decode()
+
+    vision = ChatTogether(
+        model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
+        api_key=os.environ["TOGETHER_API_KEY"],
+        temperature=0,
+        max_tokens=1500,
+    )
+    msg = LCHuman(content=[
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+        {"type": "text", "text": (
+            "Describe this image in comprehensive detail for legal research purposes. "
+            "Transcribe all visible text verbatim. Describe any charts, tables (with "
+            "their data), diagrams, signatures, stamps, and headings. Be thorough."
+        )},
+    ])
+    return vision.invoke([msg]).content
+
+
+@app.post("/context-file")
+@require_auth
+def upload_context_file():
+    if "file" not in request.files:
+        return jsonify({"error": "file is required"}), 400
+
+    file     = request.files["file"]
+    filename = file.filename or "attachment"
+    ext      = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext not in _ACCEPTED_EXTS:
+        return jsonify({
+            "error": f"Unsupported file type '.{ext}'. "
+                     f"Accepted: PDF, PNG, JPG, GIF, WEBP, MD, TXT"
+        }), 400
+
+    file_bytes = file.read()
+    if len(file_bytes) > _MAX_FILE_BYTES:
+        return jsonify({"error": "File too large — maximum 20 MB"}), 400
+
+    try:
+        if ext == "pdf":
+            text      = _extract_pdf_text(file_bytes)
+            file_type = "pdf"
+        elif ext in {"md", "markdown", "txt"}:
+            text      = file_bytes.decode("utf-8", errors="replace")
+            file_type = "text"
+        else:                           # image
+            text      = _describe_image(file_bytes, ext)
+            file_type = "image"
+    except Exception as exc:
+        app.logger.exception(f"[context-file] processing failed: {filename}")
+        return jsonify({"error": str(exc)}), 422
+
+    if len(text) > _MAX_TEXT_CHARS:
+        text = text[:_MAX_TEXT_CHARS] + f"\n\n[Content truncated at {_MAX_TEXT_CHARS:,} characters]"
+
+    return jsonify({
+        "filename":  filename,
+        "type":      file_type,
+        "text":      text,
+        "charCount": len(text),
+    })
+
+
+# ---------------------------------------------------------------------------
 # Chat (agent + RAG)
 # ---------------------------------------------------------------------------
 
@@ -262,6 +359,9 @@ def chat(session_id):
             "message": "You have used your 10,000-token allowance for this 10-hour window.",
             "resetsAt": token_status["resetsAt"],
         }), 429
+
+    attachment_text = (body.get("attachmentText") or "").strip()
+    attachment_name = (body.get("attachmentName") or "").strip()
 
     prior   = messages.get_messages(uid, session_id)
     history = [{"role": m["role"], "content": m["content"]} for m in prior]
@@ -300,7 +400,7 @@ def chat(session_id):
         thinking = answer = ""
         tokens_used = 0
         try:
-            for ev in agent.stream_response(question, history, context_chunks):
+            for ev in agent.stream_response(question, history, context_chunks, attachment_text, attachment_name):
                 etype = ev["type"]
                 if etype == "thinking":
                     yield _sse({"type": "thinking", "text": ev["text"]})

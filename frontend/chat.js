@@ -29,10 +29,21 @@ const panelDocs     = document.getElementById("panel-docs");
 const docList       = document.getElementById("doc-list");
 const docUpload     = document.getElementById("doc-upload");
 const uploadStatus  = document.getElementById("upload-status");
-const messagesEl    = document.getElementById("messages");
-const emptyState    = document.getElementById("empty-state");
-const userInput     = document.getElementById("user-input");
-const sendBtn       = document.getElementById("send-btn");
+const messagesEl          = document.getElementById("messages");
+const emptyState          = document.getElementById("empty-state");
+const userInput           = document.getElementById("user-input");
+const sendBtn             = document.getElementById("send-btn");
+const attachBtn           = document.getElementById("attach-btn");
+const fileInput           = document.getElementById("file-input");
+const attachmentPreview   = document.getElementById("attachment-preview");
+const attachmentIcon      = document.getElementById("attachment-icon");
+const attachmentFilename  = document.getElementById("attachment-filename");
+const attachmentMeta      = document.getElementById("attachment-meta");
+const attachmentRemoveBtn = document.getElementById("attachment-remove");
+
+// Current pending attachment — cleared after each message send.
+// { text: string, filename: string, type: "pdf"|"image"|"text", charCount: number }
+let attachment = null;
 const userEmailEl   = document.getElementById("user-email");
 const themeToggle   = document.getElementById("theme-toggle");
 const tokenBarWrap  = document.getElementById("token-bar-wrap");
@@ -95,6 +106,58 @@ applyTheme(document.documentElement.classList.contains("dark"));
 
 themeToggle.addEventListener("click", () => {
   applyTheme(!document.documentElement.classList.contains("dark"));
+});
+
+// ── File attachment ────────────────────────────────────────────────────────────
+const TYPE_ICONS = { pdf: "📄", image: "🖼️", text: "📝" };
+
+function showAttachmentPreview() {
+  attachmentIcon.textContent     = TYPE_ICONS[attachment.type] ?? "📎";
+  attachmentFilename.textContent = attachment.filename;
+  attachmentMeta.textContent     = `${(attachment.charCount / 1000).toFixed(1)}k chars`;
+  attachmentPreview.style.display = "flex";
+}
+
+function clearAttachment() {
+  attachment = null;
+  attachmentPreview.style.display = "none";
+  fileInput.value = "";
+}
+
+attachBtn.addEventListener("click", () => fileInput.click());
+attachmentRemoveBtn.addEventListener("click", clearAttachment);
+
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  // Show loading state on the attach button.
+  attachBtn.disabled = true;
+  attachBtn.classList.add("opacity-50");
+
+  try {
+    const token    = await auth.currentUser.getIdToken();
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch(`${API_URL}/context-file`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}` },
+      body: formData,
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? res.statusText);
+
+    attachment = data;   // { filename, type, text, charCount }
+    showAttachmentPreview();
+  } catch (err) {
+    showBanner("Could not process file: " + err.message);
+    fileInput.value = "";
+  } finally {
+    attachBtn.disabled = false;
+    attachBtn.classList.remove("opacity-50");
+  }
 });
 
 // ── Token bar ─────────────────────────────────────────────────────────────────
@@ -437,13 +500,18 @@ async function sendMessage() {
 
     userInput.value = "";
     userInput.style.height = "auto";
-    appendMessage("user", text);
+
+    // Snapshot and clear the attachment so it is shown once and not re-sent.
+    const pendingAttachment = attachment;
+    clearAttachment();
+
+    appendMessage("user", text, "", pendingAttachment?.filename ?? null, pendingAttachment?.type ?? null);
 
     const sessionId = currentSessionId;
     const stream    = createStreamingAssistantMessage();
 
     try {
-      await streamChat(sessionId, text, (evt) => {
+      await streamChat(sessionId, text, pendingAttachment, (evt) => {
         if (currentSessionId !== sessionId) return;
         switch (evt.type) {
           case "status":
@@ -486,15 +554,20 @@ async function sendMessage() {
 }
 
 // ── Streaming (SSE) ────────────────────────────────────────────────────────────
-async function streamChat(sessionId, message, onEvent) {
+async function streamChat(sessionId, message, pendingAttachment, onEvent) {
   const token = await auth.currentUser.getIdToken();
+  const body  = { message };
+  if (pendingAttachment) {
+    body.attachmentText = pendingAttachment.text;
+    body.attachmentName = pendingAttachment.filename;
+  }
   const res = await fetch(`${API_URL}/sessions/${sessionId}/chat`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -652,7 +725,9 @@ function createStreamingAssistantMessage() {
 }
 
 // Render a completed message (used when loading chat history).
-function appendMessage(role, content, thinking = "") {
+// attachmentName / attachmentType are optional and only shown for the current
+// session's user messages — they are not stored per-message in the DB.
+function appendMessage(role, content, thinking = "", attachmentName = null, attachmentType = null) {
   emptyState.style.display = "none";
 
   function makeRow(extraClass) {
@@ -668,14 +743,32 @@ function appendMessage(role, content, thinking = "") {
     const { row, inner } = makeRow("msg-user");
     const body  = document.createElement("div");
     body.className = "msg-user-body";
+
     const label = document.createElement("div");
     label.className = "msg-sender";
     label.textContent = "You";
-    const text  = document.createElement("div");
+
+    const text = document.createElement("div");
     text.className = "msg-user-text";
     text.textContent = content;
+
     body.appendChild(label);
     body.appendChild(text);
+
+    // Attachment chip shown below the message bubble when a file was sent.
+    if (attachmentName) {
+      const chip = document.createElement("div");
+      chip.className = "flex items-center gap-1.5 mt-2 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/25 rounded-xl px-3 py-1.5 text-xs w-fit ml-auto";
+      const icon = document.createElement("span");
+      icon.textContent = TYPE_ICONS[attachmentType] ?? "📎";
+      const name = document.createElement("span");
+      name.className = "truncate max-w-[220px] text-indigo-700 dark:text-indigo-300 font-medium";
+      name.textContent = attachmentName;
+      chip.appendChild(icon);
+      chip.appendChild(name);
+      body.appendChild(chip);
+    }
+
     inner.appendChild(body);
     messagesEl.appendChild(row);
     scrollToBottom();

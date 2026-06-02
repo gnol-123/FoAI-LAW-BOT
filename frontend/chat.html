@@ -135,15 +135,47 @@
       </div>
 
       <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
-        <div class="flex items-end gap-3 max-w-4xl mx-auto">
-          <!-- No whitespace inside textarea tags — any whitespace becomes initial content -->
-          <textarea id="user-input" rows="1"
-            placeholder="Ask a legal question… (Enter to send, Shift+Enter for new line)"
-            class="flex-1 resize-none px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-700 focus:border-transparent transition max-h-32 leading-relaxed"></textarea>
-          <button id="send-btn"
-            class="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-3 rounded-xl transition shadow-sm whitespace-nowrap">
-            Send
-          </button>
+        <div class="max-w-4xl mx-auto space-y-2">
+
+          <!-- Attachment preview chip (hidden until a file is attached) -->
+          <div id="attachment-preview" class="hidden items-center gap-2 px-1">
+            <div class="flex items-center gap-2 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/25 rounded-xl px-3 py-2 text-xs max-w-sm">
+              <span id="attachment-icon" class="flex-shrink-0 text-base">📄</span>
+              <span id="attachment-filename" class="truncate text-indigo-700 dark:text-indigo-300 font-medium max-w-[200px]"></span>
+              <span id="attachment-meta" class="text-indigo-400 dark:text-indigo-500 flex-shrink-0"></span>
+              <button id="attachment-remove"
+                class="flex-shrink-0 ml-1 text-indigo-400 hover:text-red-500 dark:hover:text-red-400 transition"
+                title="Remove attachment">✕</button>
+            </div>
+          </div>
+
+          <!-- Input row -->
+          <div class="flex items-end gap-2">
+            <!-- Attach button -->
+            <button id="attach-btn"
+              title="Attach a file (PDF, image, Markdown, text)"
+              class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75"
+                  d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+              </svg>
+            </button>
+            <!-- Hidden file input — accepted types kept in sync with backend _ACCEPTED_EXTS -->
+            <input id="file-input" type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.md,.markdown,.txt"
+              class="hidden">
+
+            <!-- No whitespace inside textarea — whitespace becomes initial content -->
+            <textarea id="user-input" rows="1"
+              placeholder="Ask a legal question… (Enter to send, Shift+Enter for new line)"
+              class="flex-1 resize-none px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white dark:focus:bg-slate-700 focus:border-transparent transition max-h-32 leading-relaxed"></textarea>
+
+            <button id="send-btn"
+              class="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-3 rounded-xl transition shadow-sm whitespace-nowrap">
+              Send
+            </button>
+          </div>
+
         </div>
       </div>
 
