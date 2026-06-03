@@ -627,7 +627,10 @@ async function deleteSession(sessionId, rowEl) {
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────────
-sendBtn.addEventListener("click", sendMessage);
+sendBtn.addEventListener("click", () => {
+  if (_sending) _abortController?.abort();
+  else sendMessage();
+});
 userInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
@@ -637,6 +640,19 @@ userInput.addEventListener("input", () => {
 });
 
 let _sending = false;
+let _abortController = null;
+
+function setSendBtnMode(mode) {
+  if (mode === "stop") {
+    sendBtn.textContent = "Stop";
+    sendBtn.disabled = false;
+    sendBtn.className = "flex-shrink-0 bg-red-600 hover:bg-red-500 active:bg-red-700 text-white text-sm font-medium px-5 py-3 rounded-xl transition shadow-sm whitespace-nowrap";
+  } else {
+    sendBtn.textContent = "Send";
+    sendBtn.disabled = false;
+    sendBtn.className = "flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-3 rounded-xl transition shadow-sm whitespace-nowrap";
+  }
+}
 
 async function sendMessage() {
   if (_sending) return;
@@ -644,7 +660,8 @@ async function sendMessage() {
   if (!text) return;
 
   _sending = true;
-  sendBtn.disabled = true;
+  _abortController = new AbortController();
+  setSendBtnMode("stop");
   let sentSessionId = null;
 
   try {
@@ -695,11 +712,13 @@ async function sendMessage() {
             stream.error(evt.message);
             break;
         }
-      });
+      }, _abortController.signal);
       await loadSessions();
       highlightSession(sessionId);
     } catch (err) {
-      if (err.message === "token_limit_reached") {
+      if (err.name === "AbortError") {
+        stream.stop();          // show whatever was streamed so far
+      } else if (err.message === "token_limit_reached") {
         stream.remove();
         await fetchTokenStatus();
         showBanner("Token limit reached — your allowance resets soon. Check the sidebar for the reset time.");
@@ -712,7 +731,8 @@ async function sendMessage() {
     showBanner("Could not create session: " + err.message);
   } finally {
     _sending = false;
-    sendBtn.disabled = false;
+    _abortController = null;
+    setSendBtnMode("send");
     // The exchange added messages to this chat — drop its cached copy so the
     // next time it's opened the new turn is fetched fresh.
     if (sentSessionId) messageCache.delete(sentSessionId);
@@ -721,7 +741,7 @@ async function sendMessage() {
 }
 
 // ── Streaming (SSE) ────────────────────────────────────────────────────────────
-async function streamChat(sessionId, message, pendingAttachment, onEvent) {
+async function streamChat(sessionId, message, pendingAttachment, onEvent, signal) {
   const token = await auth.currentUser.getIdToken();
   const body  = { message };
   if (pendingAttachment) {
@@ -735,6 +755,7 @@ async function streamChat(sessionId, message, pendingAttachment, onEvent) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
+    signal,
   });
 
   if (!res.ok) {
@@ -878,6 +899,24 @@ function createStreamingAssistantMessage() {
       answerEl.innerHTML = an
         ? DOMPurify.sanitize(marked.parse(an))
         : "(empty response)";
+      scrollToBottom();
+    },
+    stop() {
+      if (finalized) return;
+      finalized = true;
+      status.remove();
+      const th = thinkingRaw.trim();
+      const an = answerRaw.trim();
+      if (th) {
+        thinkingBody.innerHTML = DOMPurify.sanitize(marked.parse(th));
+        details.open = false;
+        chevron.style.transform = "";
+      } else {
+        details.remove();
+      }
+      answerEl.innerHTML = an
+        ? DOMPurify.sanitize(marked.parse(an + "\n\n*[Response stopped]*"))
+        : "<em style='opacity:0.5'>[Response stopped]</em>";
       scrollToBottom();
     },
     error(msg) {

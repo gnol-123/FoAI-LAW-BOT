@@ -312,7 +312,7 @@ def _execute_tool_calls(
 # Public API  (unchanged signatures)
 # ---------------------------------------------------------------------------
 
-_MAX_TOOL_ROUNDS = 5   # safety cap — prevent infinite tool-call loops
+_MAX_TOOL_ROUNDS = 2   # safety cap — 1 RAG call is usually enough; bail after 2
 
 
 def run(
@@ -351,6 +351,8 @@ def run(
         tool_msgs, new_chunks = _execute_tool_calls(ai_msg, calls)
         all_chunks.extend(new_chunks)
 
+        no_results = not new_chunks
+
         # Structured tool calls: append AIMessage + ToolMessages to history.
         # Text-format fallback: the AIMessage content is malformed, so skip it
         # and inject results as a human-turn context block instead.
@@ -361,14 +363,22 @@ def run(
                 f'Query: "{c["args"]["query"]}"\n{tm.content}'
                 for c, tm in zip(calls, tool_msgs)
             )
+            suffix = (
+                "The database has no relevant documents. "
+                "You MUST now answer from your general legal knowledge. "
+                "Do NOT call query_rag again."
+                if no_results else
+                "Now write your complete <thinking>…</thinking><answer>…</answer> response."
+            )
             messages = [
                 *messages,
                 HumanMessage(content=(
-                    f"[RAG Search Results]\n\n{results_text}\n\n"
-                    "Now write your complete <thinking>…</thinking>"
-                    "<answer>…</answer> response."
+                    f"[RAG Search Results]\n\n{results_text}\n\n{suffix}"
                 )),
             ]
+
+        if no_results:
+            break   # no point retrying — answer from general knowledge
 
     raw = (ai_msg.content or "") if ai_msg else ""
     log.debug(f"[LLM] raw response ({len(raw)} chars): {raw[:300]!r}")
@@ -432,6 +442,8 @@ def stream_response(
         tool_msgs, new_chunks = _execute_tool_calls(ai_msg, calls)
         all_chunks.extend(new_chunks)
 
+        no_results = not new_chunks
+
         # Structured path: history grows with AIMessage + ToolMessages.
         # Text-fallback path: AIMessage content is malformed; inject results
         # as a human-turn context block so the model can continue cleanly.
@@ -442,14 +454,22 @@ def stream_response(
                 f'Query: "{c["args"]["query"]}"\n{tm.content}'
                 for c, tm in zip(calls, tool_msgs)
             )
+            suffix = (
+                "The database has no relevant documents. "
+                "You MUST now answer from your general legal knowledge. "
+                "Do NOT call query_rag again."
+                if no_results else
+                "Now write your complete <thinking>…</thinking><answer>…</answer> response."
+            )
             messages = [
                 *messages,
                 HumanMessage(content=(
-                    f"[RAG Search Results]\n\n{results_text}\n\n"
-                    "Now write your complete <thinking>…</thinking>"
-                    "<answer>…</answer> response."
+                    f"[RAG Search Results]\n\n{results_text}\n\n{suffix}"
                 )),
             ]
+
+        if no_results:
+            break   # no point retrying — answer from general knowledge
 
     # -----------------------------------------------------------------------
     # Stream the final (non-tool-call) answer token by token.
