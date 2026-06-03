@@ -35,6 +35,7 @@ const messagesEl          = document.getElementById("messages");
 const emptyState          = document.getElementById("empty-state");
 const userInput           = document.getElementById("user-input");
 const sendBtn             = document.getElementById("send-btn");
+const extendedBtn         = document.getElementById("extended-btn");
 const attachBtn           = document.getElementById("attach-btn");
 const fileInput           = document.getElementById("file-input");
 const attachmentPreview   = document.getElementById("attachment-preview");
@@ -642,6 +643,28 @@ userInput.addEventListener("input", () => {
 let _sending = false;
 let _abortController = null;
 
+// Extended Thinking: sticky per the user's choice — persisted in localStorage so
+// it stays on across messages and page reloads until explicitly turned off.
+let _extended = localStorage.getItem("extendedThinking") === "1";
+
+const _EXT_ON_CLASS =
+  "flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl text-indigo-600 dark:text-indigo-300 bg-indigo-100 dark:bg-indigo-500/25 ring-1 ring-indigo-300 dark:ring-indigo-500/40 transition";
+const _EXT_OFF_CLASS =
+  "flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition";
+
+function setExtendedMode(on) {
+  _extended = on;
+  localStorage.setItem("extendedThinking", on ? "1" : "0");
+  extendedBtn.className = on ? _EXT_ON_CLASS : _EXT_OFF_CLASS;
+  extendedBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  extendedBtn.title = on
+    ? "Extended thinking ON — deeper reasoning & more document searches (uses more tokens). Click to turn off."
+    : "Extended thinking — deeper reasoning & more document searches (uses more tokens)";
+}
+
+extendedBtn.addEventListener("click", () => setExtendedMode(!_extended));
+setExtendedMode(_extended);   // apply restored state on load
+
 function setSendBtnMode(mode) {
   if (mode === "stop") {
     sendBtn.textContent = "Stop";
@@ -712,7 +735,7 @@ async function sendMessage() {
             stream.error(evt.message);
             break;
         }
-      }, _abortController.signal);
+      }, _abortController.signal, _extended);
       await loadSessions();
       highlightSession(sessionId);
     } catch (err) {
@@ -741,13 +764,14 @@ async function sendMessage() {
 }
 
 // ── Streaming (SSE) ────────────────────────────────────────────────────────────
-async function streamChat(sessionId, message, pendingAttachment, onEvent, signal) {
+async function streamChat(sessionId, message, pendingAttachment, onEvent, signal, extended) {
   const token = await auth.currentUser.getIdToken();
   const body  = { message };
   if (pendingAttachment) {
     body.attachmentText = pendingAttachment.text;
     body.attachmentName = pendingAttachment.filename;
   }
+  if (extended) body.extended = true;
   const res = await fetch(`${API_URL}/sessions/${sessionId}/chat`, {
     method: "POST",
     headers: {

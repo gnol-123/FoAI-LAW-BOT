@@ -59,6 +59,22 @@ You MUST structure every response exactly as shown below — no exceptions:
 [Your complete, well-formatted Markdown answer]
 </answer>"""
 
+# Appended to the system prompt when the user enables Extended Thinking mode.
+# It overrides the "use RAG selectively" default above and tells the model to
+# reason at length and search the corpus multiple times.
+EXTENDED_ADDENDUM = """
+
+---
+## 🧠 EXTENDED THINKING MODE — ACTIVE
+The user has enabled deep-research mode for this question. This **overrides** the
+"use RAG selectively / default to general knowledge" guidance above:
+
+- **Reason exhaustively** in <thinking>: decompose the question into sub-issues, identify every relevant Act and section, weigh competing interpretations, note edge cases and jurisdictional nuances, and work through the analysis carefully before answering.
+- **Search thoroughly**: you MAY call `query_rag` several times to locate and verify the exact statutory provisions. If a search misses, reformulate with different terms and try again. Cross-reference related Acts where it strengthens the answer.
+- **Be comprehensive**: deliver a detailed, well-structured answer a senior lawyer would be satisfied with — governing law, application, exceptions, and practical implications, each with citations.
+
+Take the reasoning time and the searches you genuinely need to be thorough and accurate."""
+
 _llm = None
 _title_llm = None
 
@@ -192,6 +208,7 @@ def _build_messages(
     context_chunks: list[dict] | None = None,
     attachment_text: str = "",
     attachment_name: str = "",
+    extended: bool = False,
 ) -> list:
     """
     Build the LangChain message list (system + history + question).
@@ -210,7 +227,7 @@ def _build_messages(
         for m in history
     ]
 
-    system = SYSTEM_PROMPT
+    system = SYSTEM_PROMPT + (EXTENDED_ADDENDUM if extended else "")
     if context_chunks:
         excerpts = "\n\n".join(
             f"[{c['filename']}, p.{c['pageNumber']}]\n{c['text']}"
@@ -336,7 +353,35 @@ def _execute_tool_calls(
 # Public API  (unchanged signatures)
 # ---------------------------------------------------------------------------
 
-_MAX_TOOL_ROUNDS = 1   # one RAG lookup maximum — retry wastes tokens with no gain
+_MAX_TOOL_ROUNDS = 1            # normal mode: one RAG lookup — retry wastes tokens
+_MAX_TOOL_ROUNDS_EXTENDED = 4   # extended mode: allow several searches to cross-reference
+
+
+def _results_suffix(no_results: bool, is_last_round: bool, extended: bool) -> str:
+    """Instruction appended after RAG results, telling the model what to do next.
+
+    In extended mode (and not yet on the final round) we invite another search;
+    otherwise we tell the model to stop searching and write its final answer.
+    """
+    if no_results:
+        if extended and not is_last_round:
+            return (
+                "That query returned no documents. If this provision likely exists "
+                "in federal legislation, try ONE more search with different terms; "
+                "otherwise answer from your general legal knowledge."
+            )
+        return (
+            "The database has no relevant documents. You MUST now answer from your "
+            "general legal knowledge. Do NOT call query_rag again."
+        )
+    if extended and not is_last_round:
+        return (
+            "Review these excerpts. If you need additional provisions or "
+            "cross-references to answer thoroughly, issue another query_rag call "
+            "now. Otherwise, write your complete "
+            "<thinking>…</thinking><answer>…</answer> response."
+        )
+    return "Now write your complete <thinking>…</thinking><answer>…</answer> response."
 
 
 def run(
@@ -345,6 +390,7 @@ def run(
     context_chunks: list[dict] | None = None,
     attachment_text: str = "",
     attachment_name: str = "",
+    extended: bool = False,
 ) -> tuple[str, str, list[dict], int]:
     """
     Returns (thinking, answer, sources, tokens_used).
@@ -354,15 +400,18 @@ def run(
 
     If a RAG retriever is registered the LLM may issue query_rag tool calls;
     those are executed transparently before the final answer is produced.
+    When *extended* is True the model reasons at length and may search several
+    times (see EXTENDED_ADDENDUM and _MAX_TOOL_ROUNDS_EXTENDED).
     """
-    messages = _build_messages(question, history, context_chunks, attachment_text, attachment_name)
+    messages = _build_messages(question, history, context_chunks, attachment_text, attachment_name, extended)
     llm = _get_llm_with_tools()
+    max_rounds = _MAX_TOOL_ROUNDS_EXTENDED if extended else _MAX_TOOL_ROUNDS
 
     total_tokens = 0
     all_chunks: list[dict] = list(context_chunks or [])
     ai_msg = None
 
-    for _ in range(_MAX_TOOL_ROUNDS):
+    for i in range(max_rounds):
         ai_msg = llm.invoke(messages)
 
         usage = getattr(ai_msg, "usage_metadata", None) or {}
@@ -376,6 +425,7 @@ def run(
         all_chunks.extend(new_chunks)
 
         no_results = not new_chunks
+        suffix = _results_suffix(no_results, i == max_rounds - 1, extended)
 
         # Structured tool calls: append AIMessage + ToolMessages to history.
         # Text-format fallback: the AIMessage content is malformed, so skip it
@@ -387,13 +437,6 @@ def run(
                 f'Query: "{c["args"]["query"]}"\n{tm.content}'
                 for c, tm in zip(calls, tool_msgs)
             )
-            suffix = (
-                "The database has no relevant documents. "
-                "You MUST now answer from your general legal knowledge. "
-                "Do NOT call query_rag again."
-                if no_results else
-                "Now write your complete <thinking>…</thinking><answer>…</answer> response."
-            )
             messages = [
                 *messages,
                 HumanMessage(content=(
@@ -401,8 +444,10 @@ def run(
                 )),
             ]
 
-        if no_results:
-            break   # no point retrying — answer from general knowledge
+        # Normal mode stops as soon as a search is empty; extended mode keeps
+        # going (the model may reformulate) until it runs out of rounds.
+        if no_results and not extended:
+            break
 
     raw = (ai_msg.content or "") if ai_msg else ""
     log.debug(f"[LLM] raw response ({len(raw)} chars): {raw[:300]!r}")
@@ -420,6 +465,7 @@ def stream_response(
     context_chunks: list[dict] | None = None,
     attachment_text: str = "",
     attachment_name: str = "",
+    extended: bool = False,
 ) -> Generator[dict, None, None]:
     """
     Stream the model response as it is generated, splitting the <thinking> and
@@ -437,8 +483,9 @@ def stream_response(
     The XML tags are stripped from the deltas and never split across events,
     even when a tag straddles two stream chunks.
     """
-    messages = _build_messages(question, history, context_chunks, attachment_text, attachment_name)
+    messages = _build_messages(question, history, context_chunks, attachment_text, attachment_name, extended)
     llm = _get_llm_with_tools()
+    max_rounds = _MAX_TOOL_ROUNDS_EXTENDED if extended else _MAX_TOOL_ROUNDS
 
     total_tokens = 0
     all_chunks: list[dict] = list(context_chunks or [])
@@ -446,7 +493,7 @@ def stream_response(
     # Agentic loop: resolve all tool calls before streaming the final answer.
     # Tool-call turns are non-streaming (fast retrieval); only the final
     # text-generation turn is streamed token-by-token to the client.
-    for _ in range(_MAX_TOOL_ROUNDS):
+    for i in range(max_rounds):
         ai_msg = llm.invoke(messages)
 
         usage = getattr(ai_msg, "usage_metadata", None) or {}
@@ -484,6 +531,7 @@ def stream_response(
         all_chunks.extend(new_chunks)
 
         no_results = not new_chunks
+        suffix = _results_suffix(no_results, i == max_rounds - 1, extended)
 
         # Structured path: history grows with AIMessage + ToolMessages.
         # Text-fallback path: AIMessage content is malformed; inject results
@@ -495,13 +543,6 @@ def stream_response(
                 f'Query: "{c["args"]["query"]}"\n{tm.content}'
                 for c, tm in zip(calls, tool_msgs)
             )
-            suffix = (
-                "The database has no relevant documents. "
-                "You MUST now answer from your general legal knowledge. "
-                "Do NOT call query_rag again."
-                if no_results else
-                "Now write your complete <thinking>…</thinking><answer>…</answer> response."
-            )
             messages = [
                 *messages,
                 HumanMessage(content=(
@@ -509,8 +550,10 @@ def stream_response(
                 )),
             ]
 
-        if no_results:
-            break   # no point retrying — answer from general knowledge
+        # Normal mode stops as soon as a search is empty; extended mode keeps
+        # going (the model may reformulate) until it runs out of rounds.
+        if no_results and not extended:
+            break
 
     # -----------------------------------------------------------------------
     # Stream the final (non-tool-call) answer token by token.

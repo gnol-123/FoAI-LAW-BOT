@@ -506,6 +506,10 @@ def chat(session_id):
 
     attachment_text = (body.get("attachmentText") or "").strip()
     attachment_name = (body.get("attachmentName") or "").strip()
+    # Extended Thinking mode: the model reasons at length and may search the RAG
+    # corpus several times. Opt-in per message via the composer toggle; it draws
+    # down the same token allowance, so the client controls when to spend it.
+    extended = bool(body.get("extended"))
     # Re-enforce the cap: a client could send attachmentText that bypasses the
     # /context-file extraction path entirely and inflate context/token cost.
     if len(attachment_text) > _MAX_TEXT_CHARS:
@@ -550,7 +554,7 @@ def chat(session_id):
         tokens_used = 0
         all_chunks: list[dict] = []
         try:
-            for ev in agent.stream_response(question, history, None, attachment_text, attachment_name):
+            for ev in agent.stream_response(question, history, None, attachment_text, attachment_name, extended=extended):
                 etype = ev["type"]
                 if etype == "thinking":
                     yield _sse({"type": "thinking", "text": ev["text"]})

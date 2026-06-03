@@ -175,6 +175,17 @@
               accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.md,.markdown,.txt"
               class="hidden">
 
+            <!-- Extended Thinking toggle — sticky (stays lit until turned off).
+                 Active styling is applied in chat.js (setExtendedMode). -->
+            <button id="extended-btn" type="button" aria-pressed="false"
+              title="Extended thinking — deeper reasoning &amp; more document searches (uses more tokens)"
+              class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75"
+                  d="M5 3v4M3 5h4M6.5 17v3m-1.5-1.5h3M13 4l2.286 6.857L21 13l-5.714 2.143L13 22l-2.286-6.857L5 13l5.714-2.143L13 4z"/>
+              </svg>
+            </button>
+
             <!-- No whitespace inside textarea — whitespace becomes initial content -->
             <textarea id="user-input" rows="1"
               placeholder="Ask a legal question… (Enter to send, Shift+Enter for new line)"
