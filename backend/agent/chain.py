@@ -125,11 +125,15 @@ def _get_llm() -> ChatTogether:
 
 
 def _get_llm_with_tools() -> ChatTogether:
-    """Return the LLM bound with the RAG tool (when a retriever is registered)."""
-    llm = _get_llm()
-    if _rag_query_fn is not None:
-        return llm.bind_tools(_RAG_TOOLS)
-    return llm
+    """Return the plain LLM.
+
+    Qwen3 on Together AI's serverless tput endpoint does NOT support structured
+    OpenAI-style tool_calls. Calling bind_tools() causes the API to return empty
+    content, breaking all responses. Instead, the model learns about query_rag
+    from the system prompt and emits calls as plain JSON text which
+    _extract_text_tool_calls() detects.
+    """
+    return _get_llm()
 
 
 def _parse_response(raw: str) -> tuple[str, str]:
@@ -434,6 +438,13 @@ def stream_response(
 
         usage = getattr(ai_msg, "usage_metadata", None) or {}
         total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
+        print(
+            f"[chain] invoke: content_len={len(ai_msg.content or '')} "
+            f"tool_calls={bool(getattr(ai_msg, 'tool_calls', None))} "
+            f"preview={repr((ai_msg.content or '')[:120])}",
+            flush=True,
+        )
 
         calls = _tool_calls_for(ai_msg)
         if not calls:
