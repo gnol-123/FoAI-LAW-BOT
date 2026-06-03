@@ -141,12 +141,13 @@ def sync_from_storage() -> None:
         traceback.print_exc()
 
 
-# Run in a daemon thread so gunicorn workers start immediately and Railway's
-# health check succeeds before indexing completes.  Pinecone and Whoosh are
-# external/disk-based stores — workers benefit from the sync finishing in the
-# background without needing to wait for it at startup.
-import threading as _threading
-_threading.Thread(target=sync_from_storage, daemon=True, name="storage-sync").start()
+# Only sync on startup when explicitly requested (e.g. local embedding runs).
+# On Railway, leave SYNC_ON_STARTUP unset — indexing is done locally before deploy.
+if os.environ.get("SYNC_ON_STARTUP") == "1":
+    import threading as _threading
+    _threading.Thread(target=sync_from_storage, daemon=True, name="storage-sync").start()
+else:
+    print("[sync] startup sync disabled (set SYNC_ON_STARTUP=1 to enable)")
 
 
 # Pre-warm the FastEmbed model while the master process is still single-threaded.
