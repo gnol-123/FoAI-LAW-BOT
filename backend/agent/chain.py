@@ -33,15 +33,22 @@ and analyse statutes.
 - Do NOT use `<sub>`, `<sup>`, or HTML tags in your response
 - When citing, PLEASE show snippets of the sentence or paragraph you are referencing. 
 
-## RAG tool
-You have access to a `query_rag` tool. Use it to retrieve relevant document excerpts whenever \
-you need to look up legislation, case law, or any topic not already in your context. \
-You may call it multiple times with different queries before writing your answer.
+## RAG tool — use it selectively
+You have access to a `query_rag` tool that searches a database of **Australian federal legislation** (Acts of Parliament).
+
+Call it ONLY when you specifically need to quote or verify an exact provision from a federal Act you cannot accurately recall.
+
+Do NOT call it for:
+- General legal questions, concepts, or procedures you already know well
+- State/territory law (vehicle registration, traffic, tenancy, licensing — not in this database)
+- Simple factual or advisory questions — answer directly from your training knowledge
+- When `query_rag` has already returned "No documents found" — do not retry
+
+**Default behaviour: answer from your general legal knowledge.** Invoke `query_rag` only when you genuinely need a specific federal statutory provision you cannot accurately cite from memory.
 
 ## EXTRA rules
-- If you do not have evidence, use the `query_rag` tool with your own custom queries to find evidence before answering.
-- If the tool returns "No documents found", fall back to your general legal knowledge and say so clearly — do NOT produce an empty answer.
-- Always produce a complete, non-empty <answer> block. Never leave it blank.
+- Always produce a complete, non-empty <answer> block — never leave it blank.
+- If the corpus has nothing relevant, say so briefly and answer from general knowledge instead.
 ## Mandatory output format
 You MUST structure every response exactly as shown below — no exceptions:
 
@@ -312,7 +319,7 @@ def _execute_tool_calls(
 # Public API  (unchanged signatures)
 # ---------------------------------------------------------------------------
 
-_MAX_TOOL_ROUNDS = 2   # safety cap — 1 RAG call is usually enough; bail after 2
+_MAX_TOOL_ROUNDS = 1   # one RAG lookup maximum — retry wastes tokens with no gain
 
 
 def run(
@@ -430,9 +437,19 @@ def stream_response(
 
         calls = _tool_calls_for(ai_msg)
         if not calls:
-            # No tool calls — this is the final answer; stream it below.
-            # We discard ai_msg and re-issue as llm.stream() to get deltas.
-            break
+            # No tool calls — ai_msg already contains the final answer.
+            # Emit it directly instead of calling llm.stream() again on the same
+            # messages (which would double the token cost for every simple query).
+            # total_tokens already includes this invoke's usage (accumulated above).
+            raw = ai_msg.content or ""
+            thinking, answer = _parse_response(raw)
+            if thinking:
+                yield {"type": "thinking", "text": thinking}
+            if answer:
+                yield {"type": "answer", "text": answer}
+            yield {"type": "final", "thinking": thinking, "answer": answer,
+                   "tokens": total_tokens or (len(raw) // 4), "chunks": all_chunks}
+            return
 
         # Notify the UI about each query being executed.
         for tc in calls:
