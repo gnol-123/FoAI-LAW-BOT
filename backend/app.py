@@ -221,7 +221,16 @@ def require_admin(f):
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok"})
+    # Expose the deployed git commit so we can verify *which* code Railway is
+    # actually running. Railway injects RAILWAY_GIT_COMMIT_SHA automatically on
+    # every deploy; compare it to `git rev-parse HEAD` locally to confirm a push
+    # actually went live. "build" is a manual marker we bump on each fix.
+    return jsonify({
+        "status": "ok",
+        "build":  "2026-06-03-bind-tools-fix",
+        "commit": os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown")[:12],
+        "tools_bound": agent.tools_are_bound(),
+    })
 
 
 # ---------------------------------------------------------------------------

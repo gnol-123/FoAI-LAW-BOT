@@ -136,6 +136,19 @@ def _get_llm_with_tools() -> ChatTogether:
     return _get_llm()
 
 
+def tools_are_bound() -> bool:
+    """Diagnostic for /health: True if the LLM still has tools bound.
+
+    The OLD broken code called bind_tools() (→ empty content → "unable to
+    generate a response"). The current fix returns the plain LLM, so this is
+    False. A deployed /health reporting True means Railway is running stale code.
+    """
+    llm = _get_llm_with_tools()
+    # bind_tools() returns a RunnableBinding carrying kwargs['tools'];
+    # the plain ChatTogether has no such attribute.
+    return bool(getattr(llm, "kwargs", {}).get("tools"))
+
+
 def _parse_response(raw: str) -> tuple[str, str]:
     """Extract <thinking> and <answer> blocks (case-insensitive). Falls back gracefully."""
     thinking_match = re.search(r"<thinking>(.*?)</thinking>", raw, re.DOTALL | re.IGNORECASE)
