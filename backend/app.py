@@ -563,6 +563,9 @@ def chat(session_id):
                         "message": "The model failed to respond. Please try again."})
             return
 
+        if not answer:
+            answer = thinking or "I was unable to generate a response. Please try rephrasing your question."
+
         formatted_sources = [
             {
                 "documentId":     c.get("documentId", ""),

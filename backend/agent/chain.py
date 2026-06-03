@@ -39,8 +39,9 @@ you need to look up legislation, case law, or any topic not already in your cont
 You may call it multiple times with different queries before writing your answer.
 
 ## EXTRA rules
-- If you do not have evidence, do NOT guess, use the `query_rag` tool with your own custom queries to find evidence.
-- If evidence is not found you MUST acknowledge you have a lack of evidence.
+- If you do not have evidence, use the `query_rag` tool with your own custom queries to find evidence before answering.
+- If the tool returns "No documents found", fall back to your general legal knowledge and say so clearly — do NOT produce an empty answer.
+- Always produce a complete, non-empty <answer> block. Never leave it blank.
 ## Mandatory output format
 You MUST structure every response exactly as shown below — no exceptions:
 
@@ -86,8 +87,10 @@ def query_rag(query: str) -> str:
     topic not already supplied in the conversation context.
     """
     if _rag_query_fn is None:
-        return json.dumps([])
+        return "No documents found for this query. Answer from your general legal knowledge."
     chunks = _rag_query_fn(query)
+    if not chunks:
+        return "No documents found for this query. Answer from your general legal knowledge."
     return json.dumps(chunks, ensure_ascii=False)
 
 
