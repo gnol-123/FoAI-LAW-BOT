@@ -114,6 +114,37 @@ themeToggle.addEventListener("click", () => {
   applyTheme(!document.documentElement.classList.contains("dark"));
 });
 
+// ── Text zoom ────────────────────────────────────────────────────────────────
+// Scales the root font-size; the rem/em-based UI grows/shrinks proportionally.
+// The initial size is set by the inline <head> script (no flash); here we wire
+// the buttons and keep the label/disabled state in sync. Native browser zoom
+// (Ctrl/⌘ +/−) still works on top of this.
+const zoomOutBtn   = document.getElementById("zoom-out");
+const zoomInBtn    = document.getElementById("zoom-in");
+const zoomResetBtn = document.getElementById("zoom-reset");
+const ZOOM_DEFAULT = 110, ZOOM_MIN = 80, ZOOM_MAX = 160, ZOOM_STEP = 10;
+
+let _zoom = (() => {
+  const z = parseInt(localStorage.getItem("appZoom"), 10);
+  return (!z || z < ZOOM_MIN || z > ZOOM_MAX) ? ZOOM_DEFAULT : z;
+})();
+
+function applyZoom() {
+  document.documentElement.style.fontSize = (16 * _zoom / 100) + "px";
+  localStorage.setItem("appZoom", String(_zoom));
+  zoomResetBtn.textContent = _zoom + "%";
+  zoomOutBtn.disabled = _zoom <= ZOOM_MIN;
+  zoomInBtn.disabled  = _zoom >= ZOOM_MAX;
+}
+function setZoom(v) {
+  _zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v));
+  applyZoom();
+}
+zoomOutBtn.addEventListener("click",   () => setZoom(_zoom - ZOOM_STEP));
+zoomInBtn.addEventListener("click",    () => setZoom(_zoom + ZOOM_STEP));
+zoomResetBtn.addEventListener("click", () => setZoom(ZOOM_DEFAULT));
+applyZoom();   // sync label + disabled state on load
+
 // ── File attachment ────────────────────────────────────────────────────────────
 const TYPE_ICONS    = { pdf: "📄", image: "🖼️", text: "📝" };
 const ACCEPTED_EXTS = new Set(["pdf","png","jpg","jpeg","gif","webp","md","markdown","txt"]);

@@ -11,6 +11,15 @@
     if (localStorage.getItem("theme") === "dark") {
       document.documentElement.classList.add("dark");
     }
+    /* Apply saved text zoom before first paint to avoid a resize flash.
+       The whole UI is rem/em-based, so scaling the root font-size zooms
+       everything proportionally. Default 110% — slightly larger than the
+       browser default for comfortable reading. */
+    (function () {
+      var z = parseInt(localStorage.getItem("appZoom"), 10);
+      if (!z || z < 80 || z > 160) z = 110;
+      document.documentElement.style.fontSize = (16 * z / 100) + "px";
+    })();
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -128,7 +137,19 @@
           <p id="token-reset" class="text-xs text-slate-600 mt-0.5 hidden"></p>
         </div>
         <div id="sidebar-footer-row" class="flex items-center gap-2">
-          <p id="user-email" class="sidebar-label text-xs text-slate-500 truncate flex-1"></p>
+          <p id="user-email" class="sidebar-label text-xs text-slate-500 truncate flex-1 min-w-0"></p>
+
+          <!-- Text zoom control (hidden when sidebar collapsed). Scales the root
+               font-size, so the whole rem-based UI grows/shrinks together. -->
+          <div id="zoom-control" class="sidebar-label flex items-center gap-0.5 flex-shrink-0">
+            <button id="zoom-out" title="Smaller text"
+              class="w-6 h-7 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-md transition text-base leading-none disabled:opacity-30 disabled:hover:bg-transparent">−</button>
+            <button id="zoom-reset" title="Reset text size"
+              class="w-10 text-center text-[0.625rem] font-mono text-slate-500 hover:text-slate-300 tabular-nums transition">110%</button>
+            <button id="zoom-in" title="Larger text"
+              class="w-6 h-7 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-md transition text-base leading-none disabled:opacity-30 disabled:hover:bg-transparent">+</button>
+          </div>
+
           <button id="theme-toggle"
             class="flex-shrink-0 w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition text-sm"
             title="Toggle dark / light mode">
