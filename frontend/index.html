@@ -3,251 +3,235 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LoRRAai — Sign In</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%234f46e5'/><text x='18' y='82' font-size='78' font-family='system-ui,sans-serif' font-weight='800' fill='white'>L</text></svg>">
+  <title>LoRRAai — Sign in</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='19' y='19' width='62' height='62' rx='15' fill='none' stroke='%2315181F' stroke-width='7'/><rect x='37' y='37' width='26' height='26' rx='3' fill='%23B79256' transform='rotate(45 50 50)'/></svg>">
 
   <script>
-    if (localStorage.getItem("theme") === "dark" ||
-        (!localStorage.getItem("theme") && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+    if (localStorage.getItem("theme") === "dark") {
       document.documentElement.classList.add("dark");
     }
   </script>
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config = { darkMode: "class" }</script>
-  <link rel="stylesheet" href="style.css">
+  <script>
+    /* Same brand theme as the chat — keeps the tab classes auth.js applies on-brand. */
+    tailwind.config = {
+      darkMode: "class",
+      theme: { extend: {
+        colors: {
+          indigo: { 50:'#f6f0e6',100:'#ede1cc',200:'#e0cda8',300:'#d2b985',400:'#c5a569',500:'#b79256',600:'#8f7340',700:'#755e32',800:'#5c4a28',900:'#46391f' },
+          slate:  { 50:'#f7f5f1',100:'#eeeae3',200:'#e2dcd2',300:'#cbc4b8',400:'#8c92a0',500:'#6e7480',600:'#4a4f5a',700:'#2b313b',800:'#1e232c',900:'#161a21',950:'#0e1116' },
+        },
+        fontFamily: {
+          sans:  ['IBM Plex Sans','system-ui','sans-serif'],
+          serif: ['Newsreader','Georgia','serif'],
+          mono:  ['IBM Plex Mono','ui-monospace','monospace'],
+        },
+      } },
+    };
+  </script>
+
   <style>
-    /* Animated gradient shimmer on the hero headline */
-    .hero-gradient {
-      background: linear-gradient(135deg, #a5b4fc 0%, #818cf8 30%, #c4b5fd 60%, #a5b4fc 100%);
-      background-size: 200% 200%;
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      animation: shimmer 6s ease-in-out infinite;
+    :root {
+      --paper:#f7f5f1; --paper-2:#efebe4; --card:#fff;
+      --ink:#15181f; --ink-2:#1c212b; --ink-3:#262c38;
+      --text:#15181f; --text-2:#4a515e; --text-3:#8a909c;
+      --on-ink:#eceae4; --on-ink-2:#9aa1ae;
+      --brass:#b79256; --brass-2:#c9a86a; --brass-line:#d9c9a6;
+      --line:#e2dcd2; --line-2:#d6cfc2;
+      --serif:'Newsreader',Georgia,serif; --sans:'IBM Plex Sans',system-ui,sans-serif; --mono:'IBM Plex Mono',monospace;
     }
-    @keyframes shimmer {
-      0%   { background-position: 0% 50%; }
-      50%  { background-position: 100% 50%; }
-      100% { background-position: 0% 50%; }
-    }
-    /* Subtle floating glow orbs */
-    .orb {
-      position: absolute;
-      border-radius: 50%;
-      filter: blur(80px);
-      opacity: 0.18;
-      pointer-events: none;
-    }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100vh; font-family:var(--sans); background:var(--ink); color:var(--text); }
+
+    .shell { display:grid; grid-template-columns:1.08fr 1fr; min-height:100vh; }
+    @media (max-width:900px){ .shell{ grid-template-columns:1fr; } .brand-panel{ display:none; } }
+
+    /* LEFT brand panel */
+    .brand-panel { position:relative; overflow:hidden; background:var(--ink); color:var(--on-ink);
+      padding:56px 60px; display:flex; flex-direction:column; justify-content:space-between; }
+    .brand-panel::before { content:""; position:absolute; inset:0; pointer-events:none;
+      background-image:linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px); background-size:96px 100%;
+      -webkit-mask-image:linear-gradient(180deg,transparent,#000 22%,#000 80%,transparent);
+              mask-image:linear-gradient(180deg,transparent,#000 22%,#000 80%,transparent); }
+    .watermark { position:absolute; right:-90px; bottom:-90px; opacity:.05; pointer-events:none; }
+    .brand-top { display:flex; align-items:center; gap:12px; position:relative; z-index:1; }
+    .brand-top .wm { font-weight:600; font-size:19px; letter-spacing:-.01em; color:var(--on-ink); }
+    .brand-top .wm .ai { color:var(--brass-2); font-weight:500; }
+    .brand-mid { position:relative; z-index:1; max-width:460px; }
+    .pill { display:inline-flex; align-items:center; gap:9px; border:1px solid rgba(201,168,106,.32); border-radius:999px; padding:7px 15px; margin-bottom:30px; }
+    .pill .dot { width:6px; height:6px; border-radius:50%; background:var(--brass-2); }
+    .pill span { font-family:var(--mono); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--brass-2); }
+    .headline { font-family:var(--serif); font-weight:400; font-size:52px; line-height:1.05; letter-spacing:-.015em; color:var(--on-ink); margin:0; }
+    .headline em { font-style:italic; color:var(--brass-2); }
+    .subhead { color:var(--on-ink-2); font-size:15.5px; line-height:1.65; margin:22px 0 0; max-width:430px; }
+    .features { margin-top:40px; display:flex; flex-direction:column; }
+    .feature { display:flex; gap:18px; padding:18px 0; border-top:1px solid var(--ink-3); }
+    .feature:last-child { border-bottom:1px solid var(--ink-3); }
+    .feature .idx { font-family:var(--mono); font-size:12px; color:var(--brass-2); padding-top:2px; min-width:24px; }
+    .feature h4 { margin:0; font-size:14.5px; font-weight:600; color:var(--on-ink); }
+    .feature p { margin:4px 0 0; font-size:12.5px; color:var(--on-ink-2); line-height:1.5; }
+    .brand-bottom { position:relative; z-index:1; }
+    .quote { border-left:2px solid var(--brass); padding-left:18px; max-width:440px; }
+    .quote p { font-family:var(--serif); font-style:italic; font-size:15px; line-height:1.55; color:var(--on-ink); margin:0; }
+    .quote cite { display:block; font-style:normal; font-family:var(--mono); font-size:11px; letter-spacing:.04em; color:var(--on-ink-2); margin-top:10px; }
+
+    /* RIGHT auth panel */
+    .auth-panel { background:var(--paper); display:flex; align-items:center; justify-content:center; padding:48px 40px; }
+    .auth { width:100%; max-width:372px; }
+    .auth-mobilebrand { display:none; align-items:center; gap:10px; margin-bottom:30px; }
+    @media (max-width:900px){ .auth-mobilebrand{ display:flex; } }
+
+    .auth h2 { font-family:var(--serif); font-weight:500; font-size:30px; letter-spacing:-.01em; color:var(--ink); margin:0; }
+    .auth .lede { color:var(--text-2); font-size:14px; margin:8px 0 28px; line-height:1.5; }
+
+    /* segmented track — the two buttons inside get their classes from auth.js */
+    .seg { display:flex; gap:4px; background:var(--paper-2); border:1px solid var(--line); border-radius:10px; padding:4px; margin-bottom:24px; }
+
+    .field { margin-bottom:13px; }
+    .field label { display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-3); margin-bottom:7px; }
+    /* auth.js toggles only the #auth-confirm input — keep its label in lockstep */
+    #confirm-field { margin-bottom:0; }
+    #confirm-field:has(#auth-confirm:not([style*="none"])) { margin-bottom:13px; }
+    #confirm-field label { display:none; }
+    #confirm-field:has(#auth-confirm:not([style*="none"])) label { display:block; }
+    .ipt { width:100%; padding:13px 15px; font-family:var(--sans); font-size:14.5px; color:var(--ink);
+      background:var(--card); border:1px solid var(--line-2); border-radius:10px; transition:border-color .15s, box-shadow .15s; outline:none; }
+    .ipt::placeholder { color:var(--text-3); }
+    .ipt:focus { border-color:var(--brass); box-shadow:0 0 0 3px rgba(183,146,86,.16); }
+
+    .btn-primary { width:100%; padding:14px; border:none; cursor:pointer; border-radius:10px; margin-top:8px;
+      background:var(--ink); color:#fff; font-family:var(--sans); font-size:14.5px; font-weight:600; transition:background .18s, transform .05s; }
+    .btn-primary:hover { background:#20252f; }
+    .btn-primary:active { transform:translateY(1px); }
+
+    .err { color:#a4493d; font-size:12.5px; text-align:center; min-height:1rem; margin:12px 0 0; }
+
+    .divider { display:flex; align-items:center; gap:14px; margin:22px 0; }
+    .divider hr { flex:1; border:none; border-top:1px solid var(--line); }
+    .divider span { font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; color:var(--text-3); text-transform:uppercase; }
+
+    .btn-google { width:100%; padding:12px; cursor:pointer; border-radius:10px; background:var(--card); border:1px solid var(--line-2); color:var(--text);
+      font-family:var(--sans); font-size:14px; font-weight:500; display:flex; align-items:center; justify-content:center; gap:10px; transition:background .15s,border-color .15s; }
+    .btn-google:hover { background:var(--paper); border-color:var(--line); }
+
+    .fineprint { font-size:11.5px; color:var(--text-3); line-height:1.55; margin:26px 0 0; text-align:center; }
+    .fineprint a { color:var(--text-2); }
+
+    /* verify view */
+    .verify-wrap { text-align:center; }
+    .verify-ic { width:60px; height:60px; border-radius:16px; background:var(--ink); display:flex; align-items:center; justify-content:center; margin:0 auto 20px; }
+    .verify-email { color:var(--brass); font-weight:600; }
+    .btn-ghost { width:100%; padding:11px; cursor:pointer; border-radius:10px; background:transparent; border:1px solid var(--line-2); color:var(--text-2);
+      font-family:var(--sans); font-size:13.5px; font-weight:500; transition:all .15s; }
+    .btn-ghost:hover { border-color:var(--line); background:var(--card); color:var(--ink); }
+    .btn-text { width:100%; padding:8px; cursor:pointer; background:none; border:none; color:var(--text-3); font-family:var(--sans); font-size:13px; transition:color .15s; }
+    .btn-text:hover { color:var(--text); }
   </style>
 </head>
-<body class="antialiased bg-slate-950">
+<body class="font-sans">
 
-<div class="flex min-h-screen">
+<div class="shell">
 
-  <!-- ─────────────────────────────────────────────────────────────────────────
-       LEFT — Description panel (hidden on small screens)
-  ────────────────────────────────────────────────────────────────────────── -->
-  <div class="relative hidden lg:flex lg:w-[58%] flex-col overflow-hidden bg-slate-950">
+  <!-- LEFT · brand -->
+  <section class="brand-panel">
+    <svg class="watermark" width="360" height="360" viewBox="0 0 100 100"><rect x="19" y="19" width="62" height="62" rx="15" fill="none" stroke="#fff" stroke-width="7"/><rect x="37" y="37" width="26" height="26" rx="3" fill="#fff" transform="rotate(45 50 50)"/></svg>
 
-    <!-- Background glow orbs -->
-    <div class="orb w-[480px] h-[480px] bg-indigo-600 top-[-80px] left-[-100px]"></div>
-    <div class="orb w-[320px] h-[320px] bg-purple-500 bottom-[10%] right-[-60px]"></div>
-    <div class="orb w-[200px] h-[200px] bg-indigo-400 top-[55%] left-[30%]"></div>
-
-    <!-- Subtle grid overlay -->
-    <div class="absolute inset-0 opacity-[0.04]"
-      style="background-image: linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px); background-size: 48px 48px;">
+    <div class="brand-top">
+      <svg width="30" height="30" viewBox="0 0 100 100"><rect x="19" y="19" width="62" height="62" rx="15" fill="none" stroke="#ECEAE4" stroke-width="7"/><rect x="37" y="37" width="26" height="26" rx="3" fill="#C9A86A" transform="rotate(45 50 50)"/></svg>
+      <span class="wm">LoRRA<span class="ai">ai</span></span>
     </div>
 
-    <!-- Content -->
-    <div class="relative z-10 flex flex-col justify-between h-full px-14 py-12">
+    <div class="brand-mid">
+      <div class="pill"><span class="dot"></span><span>AI-Powered Legal Research</span></div>
+      <h1 class="headline">Legal research,<br><em>reasoned.</em></h1>
+      <p class="subhead">Ask complex legal questions and receive cited, structured answers — grounded in Australian statute and case law, with the reasoning shown in full.</p>
 
-      <!-- Top: Wordmark -->
-      <div class="flex items-center gap-3">
-        <div class="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-900/50">
-          <span class="text-base font-extrabold text-white tracking-tighter select-none">L</span>
-        </div>
-        <span class="text-white font-bold text-lg tracking-tight">LoRRAai</span>
+      <div class="features">
+        <div class="feature"><div class="idx">01</div><div><h4>Australian &amp; international law</h4><p>Statutes, regulations and case law across federal and state jurisdictions.</p></div></div>
+        <div class="feature"><div class="idx">02</div><div><h4>Transparent chain-of-thought</h4><p>Follow the model's reasoning step by step before it commits to an answer.</p></div></div>
+        <div class="feature"><div class="idx">03</div><div><h4>Document analysis &amp; RAG</h4><p>Upload your own matter files — every answer cites the exact page and clause.</p></div></div>
+      </div>
+    </div>
+
+    <div class="brand-bottom">
+      <div class="quote">
+        <p>"LoRRAai cuts my research time in half, and every answer arrives with the exact statute reference I need."</p>
+        <cite>— Senior Associate, Commercial Litigation</cite>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT · auth -->
+  <section class="auth-panel">
+    <div class="auth">
+
+      <div class="auth-mobilebrand">
+        <svg width="26" height="26" viewBox="0 0 100 100"><rect x="19" y="19" width="62" height="62" rx="15" fill="none" stroke="#15181F" stroke-width="7"/><rect x="37" y="37" width="26" height="26" rx="3" fill="#B79256" transform="rotate(45 50 50)"/></svg>
+        <span style="font-weight:600;font-size:17px;color:var(--ink)">LoRRA<span style="color:var(--brass)">ai</span></span>
       </div>
 
-      <!-- Middle: Hero + features -->
-      <div class="space-y-10">
+      <!-- ── Login view ── -->
+      <div id="login-view">
+        <h2>Welcome back</h2>
+        <p class="lede">Sign in to your LoRRAai account to continue.</p>
 
-        <!-- Headline -->
-        <div class="space-y-4">
-          <div class="inline-flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/20 rounded-full px-4 py-1.5">
-            <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>
-            <span class="text-indigo-300 text-xs font-medium tracking-wide">AI-Powered Legal Research</span>
-          </div>
-          <h1 class="text-5xl font-extrabold leading-[1.1] tracking-tight">
-            <span class="hero-gradient">Legal Research,</span><br>
-            <span class="text-white">Reimagined.</span>
-          </h1>
-          <p class="text-slate-400 text-base leading-relaxed max-w-md">
-            Ask complex legal questions and get cited, structured answers — backed by Australian statute and case law, powered by advanced AI reasoning.
-          </p>
+        <div class="seg">
+          <button id="tab-signin" class="flex-1 py-1.5 text-sm font-medium rounded-lg transition bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow-sm">Sign in</button>
+          <button id="tab-register" class="flex-1 py-1.5 text-sm font-medium rounded-lg transition text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">Create account</button>
         </div>
 
-        <!-- Feature list -->
-        <div class="grid grid-cols-1 gap-4">
-
-          <div class="flex items-start gap-4 p-4 rounded-2xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.05] transition-colors">
-            <div class="w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center flex-shrink-0">
-              <span class="text-xl">⚖️</span>
-            </div>
-            <div>
-              <p class="text-white text-sm font-semibold">Australian &amp; International Law</p>
-              <p class="text-slate-500 text-xs mt-0.5 leading-relaxed">Statutes, regulations, and case law across federal and state jurisdictions.</p>
-            </div>
+        <form id="auth-form" autocomplete="off">
+          <div class="field">
+            <label for="auth-email">Email address</label>
+            <input id="auth-email" class="ipt" type="email" placeholder="you@firm.com.au" autocomplete="email" required>
           </div>
-
-          <div class="flex items-start gap-4 p-4 rounded-2xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.05] transition-colors">
-            <div class="w-10 h-10 rounded-xl bg-purple-500/15 border border-purple-500/25 flex items-center justify-center flex-shrink-0">
-              <span class="text-xl">🧠</span>
-            </div>
-            <div>
-              <p class="text-white text-sm font-semibold">Transparent Chain-of-Thought</p>
-              <p class="text-slate-500 text-xs mt-0.5 leading-relaxed">Watch the AI reason through your question step by step before answering.</p>
-            </div>
+          <div class="field">
+            <label for="auth-password">Password</label>
+            <input id="auth-password" class="ipt" type="password" placeholder="••••••••••" autocomplete="current-password" required>
+          </div>
+          <div class="field" id="confirm-field">
+            <label for="auth-confirm">Confirm password</label>
+            <input id="auth-confirm" class="ipt" type="password" placeholder="••••••••••" autocomplete="new-password" style="display:none">
           </div>
 
-          <div class="flex items-start gap-4 p-4 rounded-2xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.05] transition-colors">
-            <div class="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center flex-shrink-0">
-              <span class="text-xl">📄</span>
-            </div>
-            <div>
-              <p class="text-white text-sm font-semibold">Document Analysis &amp; RAG</p>
-              <p class="text-slate-500 text-xs mt-0.5 leading-relaxed">Upload your own PDFs — every answer cites the exact page and paragraph.</p>
-            </div>
+          <button id="auth-submit" class="btn-primary" type="submit">Sign in</button>
+          <p id="auth-error" class="err"></p>
+        </form>
+
+        <div class="divider"><hr><span>or</span><hr></div>
+
+        <button id="google-btn" class="btn-google">
+          <svg width="17" height="17" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+          Continue with Google
+        </button>
+
+        <p class="fineprint">By continuing you agree to our <a href="#">Terms</a> and <a href="#">Privacy Policy</a>. LoRRAai is a research tool and does not constitute legal advice.</p>
+      </div>
+
+      <!-- ── Verify view ── -->
+      <div id="verify-view" style="display:none">
+        <div class="verify-wrap">
+          <div class="verify-ic">
+            <svg width="30" height="30" viewBox="0 0 100 100"><rect x="19" y="19" width="62" height="62" rx="15" fill="none" stroke="#ECEAE4" stroke-width="7"/><rect x="37" y="37" width="26" height="26" rx="3" fill="#C9A86A" transform="rotate(45 50 50)"/></svg>
           </div>
-
+          <h2>Check your inbox</h2>
+          <p class="lede" style="margin-bottom:22px">We sent a verification link to<br><span id="verify-email" class="verify-email"></span></p>
         </div>
-
-        <!-- Testimonial -->
-        <div class="border-l-2 border-indigo-500/40 pl-5">
-          <p class="text-slate-300 text-sm italic leading-relaxed">
-            "LoRRAai cuts my research time in half and every answer comes with the exact statute reference I need."
-          </p>
-          <p class="text-slate-500 text-xs mt-2 font-medium">— Law Student, RMIT University</p>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <button id="verify-check-btn" class="btn-primary" style="margin-top:0">I've verified my email</button>
+          <button id="verify-resend-btn" class="btn-ghost">Resend verification email</button>
+          <button id="verify-logout-btn" class="btn-text">Use a different account</button>
+          <p id="verify-msg" class="err" style="color:var(--text-3)"></p>
         </div>
-
-      </div>
-
-      <!-- Bottom: Disclaimer -->
-      <p class="text-slate-600 text-xs leading-relaxed max-w-md">
-        LoRRAai is an AI research tool and does not constitute legal advice.
-        Always consult a qualified legal professional for matters affecting your rights.
-      </p>
-
-    </div>
-  </div>
-
-  <!-- ─────────────────────────────────────────────────────────────────────────
-       RIGHT — Auth panel
-  ────────────────────────────────────────────────────────────────────────── -->
-  <div class="flex-1 flex flex-col items-center justify-center bg-white dark:bg-slate-950 px-6 py-12 sm:px-10">
-
-    <!-- Mobile-only wordmark (shown when left panel is hidden) -->
-    <div class="flex lg:hidden items-center gap-2 mb-8">
-      <div class="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center">
-        <span class="text-sm font-extrabold text-white select-none">L</span>
-      </div>
-      <span class="text-slate-900 dark:text-white font-bold text-base tracking-tight">LoRRAai</span>
-    </div>
-
-    <!-- ── Login view ──────────────────────────────────────────────────── -->
-    <div id="login-view" class="w-full max-w-sm">
-
-      <div class="mb-8">
-        <h2 class="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Welcome back</h2>
-        <p class="text-slate-500 dark:text-slate-400 text-sm mt-1">Sign in to your LoRRAai account to continue.</p>
-      </div>
-
-      <!-- Sign in / Create account tabs -->
-      <div class="flex bg-slate-100 dark:bg-slate-800 rounded-xl p-1 gap-1 mb-6">
-        <button id="tab-signin"
-          class="flex-1 py-1.5 text-sm font-medium rounded-lg transition bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm">
-          Sign in
-        </button>
-        <button id="tab-register"
-          class="flex-1 py-1.5 text-sm font-medium rounded-lg transition text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
-          Create account
-        </button>
-      </div>
-
-      <!-- Email / password form -->
-      <form id="auth-form" class="space-y-3">
-        <input type="email" id="auth-email" placeholder="Email address"
-          autocomplete="email" required
-          class="w-full px-4 py-3 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition">
-        <input type="password" id="auth-password" placeholder="Password"
-          autocomplete="current-password" required
-          class="w-full px-4 py-3 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition">
-        <input type="password" id="auth-confirm" placeholder="Confirm password"
-          autocomplete="new-password" style="display:none"
-          class="w-full px-4 py-3 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition">
-        <button type="submit" id="auth-submit"
-          class="w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-semibold py-3 rounded-xl transition text-sm shadow-sm shadow-indigo-900/30">
-          Sign in
-        </button>
-        <p id="auth-error" class="text-red-500 text-xs text-center min-h-[1rem]"></p>
-      </form>
-
-      <!-- Divider -->
-      <div class="flex items-center gap-3 my-4">
-        <hr class="flex-1 border-slate-200 dark:border-slate-700">
-        <span class="text-xs text-slate-400 dark:text-slate-500">or</span>
-        <hr class="flex-1 border-slate-200 dark:border-slate-700">
-      </div>
-
-      <!-- Google sign-in -->
-      <button id="google-btn"
-        class="w-full flex items-center justify-center gap-2.5 border border-slate-200 dark:border-slate-700 rounded-xl py-2.5 text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60 active:bg-slate-100 dark:active:bg-slate-800 transition">
-        <svg class="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24">
-          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-        </svg>
-        Continue with Google
-      </button>
-
-    </div>
-
-    <!-- ── Email verification pending ──────────────────────────────────── -->
-    <div id="verify-view" style="display:none" class="w-full max-w-sm">
-
-      <div class="flex flex-col items-center text-center mb-8">
-        <div class="w-16 h-16 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 rounded-2xl flex items-center justify-center mb-4 text-3xl">
-          ✉️
-        </div>
-        <h2 class="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Check your inbox</h2>
-        <p class="text-slate-500 dark:text-slate-400 text-sm mt-2 leading-relaxed">
-          We sent a verification link to<br>
-          <span id="verify-email" class="text-indigo-600 dark:text-indigo-400 font-semibold"></span>
-        </p>
-      </div>
-
-      <div class="space-y-3">
-        <button id="verify-check-btn"
-          class="w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-semibold py-3 rounded-xl transition text-sm shadow-sm shadow-indigo-900/30">
-          I've verified my email
-        </button>
-        <button id="verify-resend-btn"
-          class="w-full border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 font-medium py-2.5 rounded-xl transition text-sm">
-          Resend verification email
-        </button>
-        <button id="verify-logout-btn"
-          class="w-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-sm transition py-1.5">
-          Use a different account
-        </button>
-        <p id="verify-msg" class="text-xs text-center text-slate-400 min-h-[1rem]"></p>
       </div>
 
     </div>
-
-  </div><!-- end right panel -->
+  </section>
 </div>
 
 <script type="module" src="auth.js"></script>
