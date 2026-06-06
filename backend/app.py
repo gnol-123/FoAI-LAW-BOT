@@ -415,7 +415,7 @@ def upload_context_file():
     if token_status["remaining"] <= 0:
         return jsonify({
             "error": "token_limit_reached",
-            "message": "You have used your 10,000-token allowance for this 10-hour window.",
+            "message": "You have used your 100,000-token allowance for this 10-hour window.",
             "resetsAt": token_status["resetsAt"],
         }), 429
 
@@ -500,7 +500,7 @@ def chat(session_id):
     if token_status["remaining"] <= 0:
         return jsonify({
             "error": "token_limit_reached",
-            "message": "You have used your 10,000-token allowance for this 10-hour window.",
+            "message": "You have used your 100,000-token allowance for this 10-hour window.",
             "resetsAt": token_status["resetsAt"],
         }), 429
 

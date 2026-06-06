@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from firebase_admin import firestore as fs
 from .firebase_init import get_db
 
-TOKEN_LIMIT  = 10_000
+TOKEN_LIMIT  = 100_000
 WINDOW_HOURS = 10
 
 
